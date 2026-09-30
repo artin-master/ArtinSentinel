@@ -12,7 +12,7 @@ from artin_akdb import CORE_REVISION, record_by_legacy_key
 
 
 def test_release_and_shared_akdb_0223():
-    assert __version__ == "0.2.90"
+    assert __version__ == "0.2.91"
     assert CORE_REVISION >= 6
     mhdx = capability_map(profile_key="intelbras-mhdx")
     assert mhdx["max_analog_channels"] == 4

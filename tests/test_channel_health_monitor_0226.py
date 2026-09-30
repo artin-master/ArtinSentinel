@@ -27,7 +27,7 @@ def _seed_db(tmp_path):
 
 
 def test_version_and_health_columns_0226(tmp_path):
-    assert __version__ == "0.2.90"
+    assert __version__ == "0.2.91"
     db, _, _ = _seed_db(tmp_path)
     try:
         columns = {r[1] for r in db.conn.execute("PRAGMA table_info(recorder_channels)")}

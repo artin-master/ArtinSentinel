@@ -1,11 +1,12 @@
-RELEASE_TITLE = "Atualização com múltiplas janelas"
+RELEASE_TITLE = "Configuração legível e equipamentos incluídos"
 RELEASE_NOTES = [
-    "Antes de aplicar a atualização, o Sentinel identifica outras instâncias abertas e mostra seus PIDs.",
-    "O instalador desconsidera processos já encerrados que permanecem brevemente na lista do sistema.",
-    "A reprodução, as rotinas de observação e a captura rápida da versão anterior continuam disponíveis.",
+    "Atualizações ganhou rolagem vertical para preservar o tamanho dos campos em telas menores.",
+    "A descoberta mantém equipamentos cadastrados na lista e identifica cada um como * Incluído.",
+    "Canais e Excluir ficam disponíveis diretamente para o equipamento incluído selecionado.",
 ]
-CHANGELOG_TEXT = """Artin Sentinel 0.2.90 — Atualização com múltiplas janelas
+CHANGELOG_TEXT = """Artin Sentinel 0.2.91 — Configuração e descoberta
 
-- Bloqueio claro antes de fechar o app quando outro Sentinel ainda está aberto.
-- Instalação não confunde processos zumbis com instâncias ativas.
+- Rolagem na aba Atualizações e espaço mínimo para as notas.
+- Equipamentos incluídos permanecem visíveis na descoberta, com marca e ações contextuais.
+- A inclusão não remove a linha e não cria novo cadastro para equipamento já conhecido.
 """

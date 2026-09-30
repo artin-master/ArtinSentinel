@@ -21,7 +21,7 @@ def simulate_installer(tmp_path, version, args=(), package_version="0.2.60"):
     source = (ROOT / "install.sh").read_text()
     source = source.replace('if [[ "${EUID}" -eq 0 ]]; then', 'if false; then', 1)
     source = source.replace('ROOT="$(cd "$(dirname "$0")" && pwd)"', f'ROOT="{ROOT}"', 1)
-    source = source.replace('NEW_VERSION="0.2.90"', f'NEW_VERSION="{package_version}"', 1)
+    source = source.replace('NEW_VERSION="0.2.91"', f'NEW_VERSION="{package_version}"', 1)
     script.write_text(source)
     script.chmod(0o755)
     result = subprocess.run([str(script), *args], capture_output=True, text=True,

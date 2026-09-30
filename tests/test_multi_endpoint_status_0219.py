@@ -22,7 +22,7 @@ def _itblue(site_id: int, ip: str, *, name: str, model: str, web: str = "", rtsp
 
 
 def test_release_version_0219():
-    assert __version__ == "0.2.90"
+    assert __version__ == "0.2.91"
 
 
 def test_same_site_same_mac_becomes_one_physical_device_with_two_endpoints(tmp_path: Path):

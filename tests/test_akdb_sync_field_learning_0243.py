@@ -15,7 +15,7 @@ from artin_sentinel.akdb_sync import (
 
 
 def test_release_0243():
-    assert __version__ == "0.2.90"
+    assert __version__ == "0.2.91"
 
 
 def test_field_report_is_queued_without_promoting_core(tmp_path: Path):

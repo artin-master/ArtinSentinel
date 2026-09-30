@@ -6084,6 +6084,12 @@ class MainWindow(QMainWindow):
         self.devices_add_found_btn.setObjectName("CompactAction")
         self.devices_add_found_btn.setEnabled(False)
         self.devices_add_found_btn.clicked.connect(self.add_found_from_devices)
+        self.devices_found_channels_btn = QPushButton("Canais")
+        self.devices_found_channels_btn.setEnabled(False)
+        self.devices_found_channels_btn.clicked.connect(lambda: self.act_on_found_device(self.read_device_channels_or_stream))
+        self.devices_found_delete_btn = QPushButton("Excluir")
+        self.devices_found_delete_btn.setEnabled(False)
+        self.devices_found_delete_btn.clicked.connect(lambda: self.act_on_found_device(self.delete_selected_device))
         self.devices_web_found_btn = QPushButton("Web do encontrado")
         self.devices_web_found_btn.setObjectName("CompactAction")
         self.devices_web_found_btn.setToolTip("Abrir a página de configuração detectada no navegador padrão")
@@ -6095,11 +6101,13 @@ class MainWindow(QMainWindow):
         self.devices_report_found_btn.clicked.connect(self.export_discovered_homologation_report)
         found_header.addWidget(found_title)
         found_header.addWidget(self.devices_found_status, 1)
-        found_header.addWidget(self.devices_find_btn)
-        found_header.addWidget(self.devices_add_found_btn)
-        found_header.addWidget(self.devices_web_found_btn)
-        found_header.addWidget(self.devices_report_found_btn)
         found_layout.addLayout(found_header)
+        found_actions = QHBoxLayout()
+        for button in (self.devices_find_btn, self.devices_add_found_btn, self.devices_found_channels_btn,
+                       self.devices_found_delete_btn, self.devices_web_found_btn, self.devices_report_found_btn):
+            found_actions.addWidget(button)
+        found_actions.addStretch()
+        found_layout.addLayout(found_actions)
         self.devices_found_table = QTableWidget(0, 6)
         self.devices_found_table.setHorizontalHeaderLabels(["IP", "Tipo", "Modelo / AKDB", "Portas", "Estado", "Evidência"])
         self.devices_found_table.setColumnWidth(0, 125)
@@ -6732,7 +6740,17 @@ class MainWindow(QMainWindow):
 
     def build_updates_tab(self):
         tab = QWidget()
-        layout = QVBoxLayout(tab)
+        outer = QVBoxLayout(tab)
+        outer.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea(tab)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        body = QWidget()
+        layout = QVBoxLayout(body)
+        layout.setSizeConstraint(QLayout.SetMinimumSize)
+        scroll.setWidget(body)
+        outer.addWidget(scroll)
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(10)
 
@@ -6848,6 +6866,7 @@ class MainWindow(QMainWindow):
         self.update_notes.setReadOnly(True)
         self.update_notes.setPlaceholderText("As novidades da versão disponível aparecerão aqui.")
         self.update_notes.setMaximumBlockCount(300)
+        self.update_notes.setMinimumHeight(130)
         layout.addWidget(self.update_notes, 1)
 
         policy = QLabel(
@@ -7325,6 +7344,8 @@ class MainWindow(QMainWindow):
             self.live_activity.setText("Nenhum evento registrado.")
 
         self.refresh_source_tree(sites, self.db.list_devices(None))
+        if hasattr(self, "devices_found_table") and self.devices_found_table.rowCount() == len(self.discovery_results):
+            self.refresh_discovery_registration()
 
     # ---------- site / device management ----------
     def add_site(self):
@@ -8213,12 +8234,48 @@ class MainWindow(QMainWindow):
         row = self.devices_found_table.currentRow()
         selected = 0 <= row < len(self.discovery_results)
         known = self.db.find_known_for_discovery(self.current_site_id, self.discovery_results[row]) if selected else None
-        self.devices_add_found_btn.setText("Restaurar selecionado" if known and known["archived"] else "Adicionar selecionado")
+        included = bool(known and not known["archived"])
+        self.devices_add_found_btn.setText("Ver incluído" if included else "Restaurar selecionado" if known and known["archived"] else "Adicionar selecionado")
         self.devices_add_found_btn.setEnabled(selected)
+        self.devices_found_channels_btn.setEnabled(included)
+        self.devices_found_delete_btn.setEnabled(included)
         self.devices_report_found_btn.setEnabled(selected)
         self.devices_web_found_btn.setEnabled(bool(
             selected and discovered_web_url(self.discovery_results[row].web_url, self.discovery_results[row].ip)
         ))
+
+    def act_on_found_device(self, action):
+        row = self.devices_found_table.currentRow()
+        if not 0 <= row < len(self.discovery_results):
+            return
+        known = self.db.find_known_for_discovery(self.current_site_id, self.discovery_results[row])
+        if not known or known["archived"]:
+            return
+        self.device_filter.clear()
+        for index in range(self.dev_table.rowCount()):
+            item = self.dev_table.item(index, 0)
+            if item and item.data(Qt.UserRole) == int(known["id"]):
+                self.dev_table.selectRow(index)
+                action()
+                self.refresh_discovery_registration()
+                return
+
+    def refresh_discovery_registration(self):
+        included_count = 0
+        for row, device in enumerate(self.discovery_results):
+            known = self.db.find_known_for_discovery(self.current_site_id, device)
+            included = bool(known and not known["archived"])
+            included_count += int(included)
+            state = "* Incluído" if included else "Arquivado • restaurar" if known and known["archived"] else "Novo • validar"
+            if known and known["ignored_discovery"]:
+                state += " • ignorado"
+            item = self.devices_found_table.item(row, 4)
+            if item:
+                item.setText(state)
+                item.setForeground(QColor("#94e2b8" if included else "#d7c99d"))
+                item.setToolTip("Equipamento já incluído: use Canais ou Excluir." if included else state)
+        self.devices_found_status.setText(f"{len(self.discovery_results)} localizado(s) • {included_count} incluído(s)")
+        self._discovery_selection_changed()
 
     def open_discovered_device_web(self):
         row = self.devices_found_table.currentRow()
@@ -8250,9 +8307,7 @@ class MainWindow(QMainWindow):
         if len(report.other_hosts) > 20:
             self.devices_discovery_log.appendPlainText(f"Rede • mais {len(report.other_hosts) - 20} host(s) omitidos")
 
-        # 0.2.20: discovery is a *new-device* list. Strongly known physical
-        # identities are refreshed silently and do not return to the add list,
-        # even when archived/offline or when a new endpoint/IP is observed.
+        # Retain registered devices alongside new discoveries for channel management.
         new_devices = []
         known_count = archived_count = ignored_count = endpoint_updates = 0
         for device in report.devices:
@@ -8278,12 +8333,13 @@ class MainWindow(QMainWindow):
                     archived_count += 1
                 if int(known["ignored_discovery"] or 0):
                     ignored_count += 1
+                new_devices.append(device)
                 continue
             new_devices.append(device)
 
         if known_count:
             self.devices_discovery_log.appendPlainText(
-                f"{known_count} equipamento(s) já cadastrados foram reconhecidos e suprimidos da lista"
+                f"{known_count} equipamento(s) já cadastrados reconhecidos e marcados como incluídos"
                 + (f"; {endpoint_updates} novo(s) endpoint(s) associado(s)" if endpoint_updates else "")
                 + "."
             )
@@ -8337,6 +8393,7 @@ class MainWindow(QMainWindow):
                 item = QTableWidgetItem(str(value))
                 item.setToolTip(ev)
                 self.devices_found_table.setItem(row, col, item)
+        self.refresh_discovery_registration()
 
     def add_found_from_devices(self):
         row = self.devices_found_table.currentRow()
@@ -8378,6 +8435,9 @@ class MainWindow(QMainWindow):
         device = self.discovery_results[row]
         device.site_id = self.current_site_id
         known = self.db.find_known_for_discovery(self.current_site_id, device)
+        if known and not known["archived"]:
+            self.act_on_found_device(self.refresh_device_inspector)
+            return
         if known and known["ignored_discovery"]:
             QMessageBox.information(self, "Descoberta", "Este equipamento está marcado como ignorado. Remova a marca em Equipamentos antes de adicioná-lo novamente.")
             return
@@ -8390,10 +8450,8 @@ class MainWindow(QMainWindow):
         device_id = self.db.upsert_device(device)
         self.db.add_event(self.current_site_id, device_id, "info", "device_added", f"{device.name} ({device.ip}) adicionado ao Site.")
         self.devices_discovery_log.appendPlainText(f"Adicionado ao Site: {device.ip} — {device.name}")
-        self.discovery_results.pop(row)
-        self.devices_found_table.removeRow(row)
-        self.devices_found_status.setText(f"{len(self.discovery_results)} equipamento(s) novo(s) aguardando cadastro")
         self.refresh_all()
+        self.refresh_discovery_registration()
         QMessageBox.information(
             self,
             "Equipamento",

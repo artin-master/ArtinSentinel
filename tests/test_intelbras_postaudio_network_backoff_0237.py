@@ -9,7 +9,7 @@ from artin_sentinel.talkback import _digest_challenge_params, _digest_authorizat
 
 
 def test_release_0237():
-    assert __version__ == "0.2.90"
+    assert __version__ == "0.2.91"
 
 
 def test_digest_parser_and_authorization_do_not_include_password():
