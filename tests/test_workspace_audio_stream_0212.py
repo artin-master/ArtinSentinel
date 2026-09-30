@@ -7,7 +7,7 @@ from artin_sentinel.live import ordered_audio_urls
 
 
 def test_version_0212():
-    assert __version__ == "0.2.86"
+    assert __version__ == "0.2.89"
 
 
 def test_audio_candidates_try_active_then_other_profile():

@@ -6,7 +6,7 @@ from artin_sentinel import __version__
 
 
 def test_release_0232():
-    assert __version__ == "0.2.86"
+    assert __version__ == "0.2.89"
 
 
 def test_pipewire_is_preferred_and_ffplay_is_real_fallback(monkeypatch):

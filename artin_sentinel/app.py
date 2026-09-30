@@ -77,6 +77,7 @@ from .private_update_auth import store_token
 from .recording_search import search_recordings, search_recordings_multi, playback_rtsp_url
 from .hik_recording import search_hikvision_recordings, search_hikvision_recordings_multi, hikvision_playback_url
 from .recording_export import export_mp4
+from .quick_capture import ManualRecording
 from .talkback import (
     XmDvripTalkbackSession, IntelbrasHttpTalkbackSession, IntelbrasNetSDKTalkbackSession, MicrophoneInput, AudioInputPreferences,
     discover_microphone_inputs, ffmpeg_microphone_inputs, probe_microphone_level,
@@ -1793,6 +1794,7 @@ class MainWindow(QMainWindow):
         self._primary_mosaic_fullscreen = False
         self._focus_return_state = None
         self._closing_app = False
+        self.manual_recording = None
         self.update_settings = load_update_settings(data_dir())
         self.akdb_sync_settings = load_akdb_sync_settings(data_dir())
         self.akdb_remote_result = None
@@ -2109,6 +2111,29 @@ class MainWindow(QMainWindow):
         self.layout_combo.currentIndexChanged.connect(self.change_video_layout)
         self.layout_combo.setMaximumWidth(118)
         actions.addWidget(self.layout_combo)
+
+        self.preset_combo = QComboBox()
+        self.preset_combo.setToolTip("Rotina de observação: escolher e carregar um mosaico salvo")
+        self.preset_combo.setMinimumWidth(120)
+        self.preset_combo.setMaximumWidth(190)
+        self.preset_combo.activated.connect(self.load_selected_live_preset)
+        actions.addWidget(self.preset_combo)
+        preset_menu = QToolButton()
+        preset_menu.setObjectName("ToolbarIconAction")
+        preset_menu.setText("⋯")
+        preset_menu.setToolTip("Salvar ou excluir rotina de observação")
+        preset_menu.setPopupMode(QToolButton.InstantPopup)
+        menu = QMenu(preset_menu)
+        menu.addAction("Salvar mosaico atual…", self.save_named_live_preset)
+        menu.addAction("Excluir perfil selecionado…", self.delete_selected_live_preset)
+        preset_menu.setMenu(menu)
+        actions.addWidget(preset_menu)
+        photo = self._toolbar_icon_button("SP_DialogSaveButton", "◉", "Salvar foto do canal selecionado", self.save_live_photo)
+        actions.addWidget(photo)
+        self.record_button = self._toolbar_icon_button("SP_MediaRecord", "●", "Iniciar gravação do canal selecionado", self.toggle_manual_recording)
+        self.record_button.setIcon(QIcon())
+        self.record_button.setText("●")
+        actions.addWidget(self.record_button)
 
         self.inspector_toggle = QToolButton()
         self.inspector_toggle.setObjectName("ToolbarIconAction")
@@ -4602,8 +4627,16 @@ class MainWindow(QMainWindow):
         self.rename_selected_channel()
 
     def save_live_workspace(self, *_args):
-        if not self.current_site_id or not hasattr(self, "video_tiles"):
+        if getattr(self, "_suspend_workspace_save", False) or not self.current_site_id or not hasattr(self, "video_tiles"):
             return
+        slots = self._live_slots_snapshot()
+        ask = bool(self.ask_stream_check.isChecked()) if hasattr(self, "ask_stream_check") else False
+        try:
+            self.db.save_live_workspace(self.current_site_id, len(self.video_tiles) or 4, slots, ask)
+        except Exception:
+            pass
+
+    def _live_slots_snapshot(self):
         slots = []
         for tile in self.video_tiles:
             source = tile.source
@@ -4617,17 +4650,172 @@ class MainWindow(QMainWindow):
                 "forced_stream": source.get("forced_stream") or "",
                 "display_mode": source.get("display_mode") or tile.display_mode,
             })
-        ask = bool(self.ask_stream_check.isChecked()) if hasattr(self, "ask_stream_check") else False
+        return slots
+
+    def refresh_live_presets(self):
+        if not hasattr(self, "preset_combo"):
+            return
+        previous = self.preset_combo.currentData()
+        self.preset_combo.blockSignals(True)
+        self.preset_combo.clear()
+        self.preset_combo.addItem("Rotinas salvas", "")
+        if self.current_site_id:
+            for row in self.db.list_live_presets(self.current_site_id):
+                self.preset_combo.addItem(row["name"], row["name"])
+        self.preset_combo.setCurrentIndex(max(0, self.preset_combo.findData(previous)))
+        self.preset_combo.blockSignals(False)
+
+    def save_named_live_preset(self):
+        if not self.current_site_id:
+            return
+        name, ok = QInputDialog.getText(self, "Salvar rotina", "Nome da rotina de observação:",
+                                        text=str(self.preset_combo.currentData() or ""))
+        name = name.strip()
+        if not ok or not name:
+            return
+        if len(name) > 64:
+            QMessageBox.warning(self, "Nome longo", "Use até 64 caracteres.")
+            return
+        if self.db.load_live_preset(self.current_site_id, name):
+            if QMessageBox.question(self, "Substituir rotina", f"Substituir a rotina ‘{name}’ pelo mosaico atual?") != QMessageBox.Yes:
+                return
+        self.db.save_live_preset(self.current_site_id, name, len(self.video_tiles), self._live_slots_snapshot())
+        self.refresh_live_presets()
+        self.preset_combo.setCurrentIndex(self.preset_combo.findData(name))
+        self.bottom_notice.setText(f"Rotina ‘{name}’ salva")
+
+    def load_selected_live_preset(self, _index):
+        name = self.preset_combo.currentData()
+        if not name or not self.current_site_id:
+            return
+        state = self.db.load_live_preset(self.current_site_id, name)
+        if not state:
+            self.refresh_live_presets()
+            return
+        count = state["grid_count"]
+        if self.layout_combo.findData(count) < 0:
+            return
+        self._suspend_workspace_save = True
         try:
-            self.db.save_live_workspace(self.current_site_id, len(self.video_tiles) or 4, slots, ask)
-        except Exception:
-            pass
+            self.clear_video_grid_sources()
+            self.layout_combo.blockSignals(True)
+            self.layout_combo.setCurrentIndex(self.layout_combo.findData(count))
+            self.layout_combo.blockSignals(False)
+            self.rebuild_video_grid(count)
+        finally:
+            self._suspend_workspace_save = False
+        missing = 0
+        for tile, saved in zip(self.video_tiles, state["slots"]):
+            if not isinstance(saved, dict) or saved.get("type") != "channel":
+                continue
+            try:
+                device_id, channel_id = int(saved["device_id"]), int(saved["channel_id"])
+            except (ValueError, TypeError, KeyError):
+                missing += 1
+                continue
+            device = self.db.get_device(device_id)
+            channel = self.db.get_recorder_channel(channel_id)
+            if not device or not channel or int(channel["device_id"]) != device_id or int(device["site_id"] or 0) != self.current_site_id:
+                missing += 1
+                continue
+            source = {"type": "channel", "device_id": device_id, "channel_id": channel_id,
+                      "display_mode": saved.get("display_mode") or "fill"}
+            if saved.get("forced_stream") in {"main", "sub"}:
+                source["forced_stream"] = saved["forced_stream"]
+            self.apply_source_to_tile(tile, source)
+        self.save_live_workspace()
+        self.bottom_notice.setText(f"Rotina ‘{name}’ carregada" + (f" • {missing} canal(is) indisponíveis" if missing else ""))
+
+    def delete_selected_live_preset(self):
+        name = self.preset_combo.currentData()
+        if not name or not self.current_site_id:
+            return
+        if QMessageBox.question(self, "Excluir rotina", f"Excluir a rotina ‘{name}’?") != QMessageBox.Yes:
+            return
+        self.db.delete_live_preset(self.current_site_id, name)
+        self.refresh_live_presets()
+
+    def save_live_photo(self):
+        tile = self.selected_video_tile
+        pixmap = tile.body.pixmap() if tile and tile.source else None
+        if pixmap is None or pixmap.isNull():
+            QMessageBox.information(self, "Foto", "Selecione um canal com imagem ao vivo.")
+            return
+        suggested = f"Sentinel-foto-{datetime.now():%Y%m%d-%H%M%S}.png"
+        path, _ = QFileDialog.getSaveFileName(self, "Salvar foto", suggested, "Imagem PNG (*.png)")
+        if not path:
+            return
+        if not path.lower().endswith(".png"):
+            path += ".png"
+        if os.path.exists(path):
+            QMessageBox.warning(self, "Foto", "O arquivo já existe. Escolha outro nome.")
+            return
+        if not pixmap.save(path, "PNG"):
+            QMessageBox.warning(self, "Foto", "Não foi possível salvar a foto.")
+        else:
+            self.bottom_notice.setText(f"Foto salva: {path}")
+
+    def toggle_manual_recording(self):
+        recording = self.manual_recording
+        if recording is not None:
+            if not recording.finished:
+                recording.stop()
+                self.bottom_notice.setText("Finalizando MP4…")
+            return
+        tile = self.selected_video_tile
+        if not tile or not tile.source or tile.index not in self.live_sessions:
+            QMessageBox.information(self, "Gravação", "Selecione um canal com vídeo ao vivo.")
+            return
+        session = self.live_sessions[tile.index]
+        url = session.fallback_url if session.active_profile == session.fallback_name else session.url
+        if not str(url).lower().startswith("rtsp://"):
+            QMessageBox.information(self, "Gravação", "Gravação rápida disponível para streams RTSP. Use a reprodução do gravador para este canal.")
+            return
+        suggested = f"Sentinel-video-{datetime.now():%Y%m%d-%H%M%S}.mp4"
+        path, _ = QFileDialog.getSaveFileName(self, "Gravar vídeo ao vivo", suggested, "Vídeo MP4 (*.mp4)")
+        if not path:
+            return
+        if not path.lower().endswith(".mp4"):
+            path += ".mp4"
+        recording = ManualRecording(url, session.username, session.password, path)
+        try:
+            recording.start()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Gravação", str(exc))
+            return
+        self.manual_recording = recording
+        self.record_button.setText("■")
+        self.record_button.setToolTip("Parar gravação e finalizar MP4")
+        self.bottom_notice.setText("● Gravação iniciada • clique em ■ para salvar")
+        QTimer.singleShot(500, self.poll_manual_recording)
+
+    def poll_manual_recording(self):
+        recording = self.manual_recording
+        if recording is None:
+            return
+        if not recording.finished:
+            if not self._closing_app:
+                QTimer.singleShot(500, self.poll_manual_recording)
+            return
+        self.manual_recording = None
+        self.record_button.setText("●")
+        self.record_button.setToolTip("Iniciar gravação do canal selecionado")
+        if recording.saved:
+            self.bottom_notice.setText(f"Vídeo salvo: {recording.destination}")
+        else:
+            QMessageBox.warning(self, "Gravação", recording.error or "Não foi possível salvar o MP4.")
 
     def restore_live_workspace(self):
         if not self.current_site_id or not hasattr(self, "layout_combo"):
             return
+        self.refresh_live_presets()
         state = self.db.load_live_workspace(self.current_site_id)
         if not state:
+            self._suspend_workspace_save = True
+            try:
+                self.clear_video_grid_sources()
+            finally:
+                self._suspend_workspace_save = False
             self._workspace_restored_site = self.current_site_id
             return
         count = int(state.get("grid_count") or 4)
@@ -4636,7 +4824,12 @@ class MainWindow(QMainWindow):
             self.layout_combo.blockSignals(True)
             self.layout_combo.setCurrentIndex(idx)
             self.layout_combo.blockSignals(False)
-        self.rebuild_video_grid(count)
+        self._suspend_workspace_save = True
+        try:
+            self.clear_video_grid_sources()
+            self.rebuild_video_grid(count)
+        finally:
+            self._suspend_workspace_save = False
         ask_stream = bool(state.get("ask_stream"))
         self.ask_stream_check.blockSignals(True)
         self.ask_stream_check.setChecked(ask_stream)
@@ -5118,7 +5311,11 @@ class MainWindow(QMainWindow):
             item = self.playback_results.item(row, 0)
             recording = item.data(Qt.UserRole) if item else None
             if recording and recording.start <= point.strftime("%Y-%m-%d %H:%M:%S") < recording.end:
-                self.playback_results.selectRow(row)
+                self.playback_results.blockSignals(True)
+                try:
+                    self.playback_results.selectRow(row)
+                finally:
+                    self.playback_results.blockSignals(False)
                 self.play_selected_recording(at=point)
                 return
         self.playback_diagnostic.setText(f"Sem gravação no horário {point:%H:%M:%S}.")
@@ -5281,7 +5478,7 @@ class MainWindow(QMainWindow):
         except (ValueError, TypeError, RuntimeError):
             self.playback_status.setText("Trecho inválido; refaça a busca de gravações.")
             return
-        self.stop_playback_stream()
+        self.stop_playback_stream(preserve_focus=True)
         self.playback_clip_bounds = (start, end)
         self.playback_seek.setRange(0, max(1, int((end - start).total_seconds())))
         self.playback_seek.setValue(offset)
@@ -5319,7 +5516,7 @@ class MainWindow(QMainWindow):
         if not credentials:
             self.playback_diagnostic.setText("Credencial do gravador indisponível.")
             return
-        self.stop_playback_stream()
+        self.stop_playback_stream(preserve_focus=True)
         active = []
         for channel in channels:
             if channel not in available:
@@ -5375,7 +5572,7 @@ class MainWindow(QMainWindow):
         self.playback_audio_source.blockSignals(False)
         self.change_playback_audio_source()
 
-    def stop_playback_stream(self):
+    def stop_playback_stream(self, *, preserve_focus=False):
         self.stop_playback_audio()
         self.playback_audio_route = None
         self.playback_audio_candidates = {}
@@ -5390,7 +5587,8 @@ class MainWindow(QMainWindow):
         for item in sessions:
             item.stop()
         if hasattr(self, "playback_stop_btn"):
-            self.set_playback_focus(None)
+            if not preserve_focus:
+                self.set_playback_focus(None)
             self.playback_stop_btn.setEnabled(False)
             for index, screen in enumerate(self.playback_screens):
                 screen.setPixmap(QPixmap())
@@ -5447,7 +5645,7 @@ class MainWindow(QMainWindow):
             url = self.recording_route(self.selected_recording_row(), host, channel, target, end, port)
         except (ValueError, TypeError, RuntimeError):
             return
-        self.stop_playback_stream()
+        self.stop_playback_stream(preserve_focus=True)
         self.playback_clip_bounds = (start, end)
         self.playback_started_at = None
         self.playback_offset_seconds = int((target - start).total_seconds())
@@ -5536,6 +5734,9 @@ class MainWindow(QMainWindow):
         destination, _ = QFileDialog.getSaveFileName(self, "Salvar gravação em MP4", default_name, "Vídeo MP4 (*.mp4)")
         if not destination:
             return
+        if self.playback_session is not None or self.playback_sessions:
+            self.stop_playback_stream(preserve_focus=True)
+            self.playback_status.setText("Reprodução parada durante a exportação; pressione Reproduzir para voltar.")
         self.playback_export_cancel = threading.Event()
         worker = Worker(export_mp4, url, credentials[0], credentials[1], destination,
                         int((end - start).total_seconds()), cancel=self.playback_export_cancel,
@@ -9202,6 +9403,9 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         self.save_live_workspace()
+        if self.manual_recording is not None:
+            self.manual_recording.stop()
+            self.manual_recording._thread.join(timeout=12)
         if self.playback_export_cancel is not None:
             self.playback_export_cancel.set()
         self.playback_poll_timer.stop()

@@ -71,6 +71,15 @@ CREATE TABLE IF NOT EXISTS live_workspaces(
  updated_at TEXT NOT NULL,
  FOREIGN KEY(site_id) REFERENCES sites(id)
 );
+CREATE TABLE IF NOT EXISTS live_presets(
+ site_id INTEGER NOT NULL,
+ name TEXT NOT NULL COLLATE NOCASE,
+ grid_count INTEGER NOT NULL,
+ slots_json TEXT NOT NULL,
+ updated_at TEXT NOT NULL,
+ PRIMARY KEY(site_id, name),
+ FOREIGN KEY(site_id) REFERENCES sites(id)
+);
 CREATE TABLE IF NOT EXISTS live_windows(
  id INTEGER PRIMARY KEY AUTOINCREMENT,
  site_id INTEGER NOT NULL,
@@ -584,6 +593,7 @@ class Database:
                 self.delete_device_permanently(int(device["id"]))
 
         self.conn.execute("DELETE FROM live_workspaces WHERE site_id=?", (site_id,))
+        self.conn.execute("DELETE FROM live_presets WHERE site_id=?", (site_id,))
         self.conn.execute("DELETE FROM events WHERE site_id=?", (site_id,))
         self.conn.execute("DELETE FROM sites WHERE id=?", (site_id,))
         self.conn.commit()
@@ -1267,6 +1277,35 @@ class Database:
             ask_stream=excluded.ask_stream,updated_at=excluded.updated_at""",
             (int(site_id), int(grid_count), payload, int(bool(ask_stream)), utcnow()),
         )
+        self.conn.commit()
+
+    def list_live_presets(self, site_id: int):
+        return list(self.conn.execute(
+            "SELECT name,grid_count,updated_at FROM live_presets WHERE site_id=? ORDER BY name COLLATE NOCASE",
+            (int(site_id),)))
+
+    def save_live_preset(self, site_id: int, name: str, grid_count: int, slots: list[dict]):
+        name = name.strip()
+        if not name or len(name) > 64 or int(grid_count) not in (1, 4, 9, 16, 25, 36, 49, 64, 81, 100, 144):
+            raise ValueError("Nome ou grade do perfil inválido")
+        self.conn.execute(
+            """INSERT INTO live_presets(site_id,name,grid_count,slots_json,updated_at) VALUES(?,?,?,?,?)
+            ON CONFLICT(site_id,name) DO UPDATE SET grid_count=excluded.grid_count,
+            slots_json=excluded.slots_json,updated_at=excluded.updated_at""",
+            (int(site_id), name, int(grid_count), json.dumps(slots, ensure_ascii=False), utcnow()))
+        self.conn.commit()
+
+    def load_live_preset(self, site_id: int, name: str):
+        row = self.conn.execute("SELECT * FROM live_presets WHERE site_id=? AND name=?",
+                                (int(site_id), name)).fetchone()
+        if not row:
+            return None
+        slots = json.loads(row["slots_json"])
+        return {"name": row["name"], "grid_count": int(row["grid_count"]),
+                "slots": slots if isinstance(slots, list) else []}
+
+    def delete_live_preset(self, site_id: int, name: str):
+        self.conn.execute("DELETE FROM live_presets WHERE site_id=? AND name=?", (int(site_id), name))
         self.conn.commit()
 
     def load_live_workspace(self, site_id: int):

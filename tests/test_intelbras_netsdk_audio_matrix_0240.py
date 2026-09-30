@@ -24,7 +24,7 @@ from artin_sentinel.talkback import IntelbrasNetSDKTalkbackSession, AudioInputPr
 
 
 def test_release_version_0240():
-    assert __version__ == "0.2.86"
+    assert __version__ == "0.2.89"
 
 
 def test_g711a_private_frame_header_matches_8khz_alaw_shape():

@@ -5,7 +5,7 @@ from artin_sentinel.akdb import audio_capability, reconcile_operational_profile_
 
 
 def test_release_version_0231():
-    assert __version__ == "0.2.86"
+    assert __version__ == "0.2.89"
 
 
 def test_stale_generic_itblue_speeddome_is_reconciled_to_field_x3_profile():
