@@ -7,7 +7,7 @@ from artin_akdb import CORE_REVISION, record_by_legacy_key
 
 
 def test_release_0228_and_official_artinupdates_default():
-    assert __version__ == "0.2.89"
+    assert __version__ == "0.2.90"
     assert DEFAULT_MANIFEST_BASE_URL == "https://raw.githubusercontent.com/artin-master/ArtinUpdates/main"
     assert resolve_manifest_url(DEFAULT_MANIFEST_BASE_URL, "stable") == (
         "https://raw.githubusercontent.com/artin-master/ArtinUpdates/main/sentinel/stable.json"

@@ -8,7 +8,7 @@ from artin_akdb import CORE_REVISION, record_by_legacy_key
 
 
 def test_version_and_shared_akdb_revision_0222():
-    assert __version__ == "0.2.89"
+    assert __version__ == "0.2.90"
     assert CORE_REVISION >= 5
     row = record_by_legacy_key("hikvision-ds-7216hghi-f1")
     assert row is not None
@@ -88,6 +88,6 @@ def test_fullscreen_path_preserves_live_sessions_and_mosaic_scaling_is_lightweig
 
 def test_installer_reports_real_0222_version():
     install = Path("install.sh").read_text(encoding="utf-8")
-    assert 'NEW_VERSION="0.2.89"' in install
+    assert 'NEW_VERSION="0.2.90"' in install
     assert 'Artin Sentinel $NEW_VERSION instalado/atualizado.' in install
     assert 'Artin Sentinel 0.2.19 instalado/atualizado.' not in install

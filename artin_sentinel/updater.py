@@ -56,6 +56,27 @@ MAX_PACKAGE_BYTES = 2 * 1024 * 1024 * 1024
 STARTUP_CHECK_INTERVAL_HOURS = 6
 
 
+def other_sentinel_pids(current_pid: int, runtime_dir: Path | None = None) -> list[int]:
+    """Find other live instances of this user's installed Sentinel."""
+    runtime = Path(runtime_dir) if runtime_dir else Path.home() / ".local/share/artin-sentinel/runtime"
+    targets = {str(runtime / "bin/artin-sentinel"), str(Path.home() / ".local/bin/artin-sentinel")}
+    matches = []
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdecimal() or int(entry.name) in {os.getpid(), int(current_pid)}:
+            continue
+        try:
+            if entry.stat().st_uid != os.getuid() or (entry / "stat").read_text().split(") ", 1)[1][0] == "Z":
+                continue
+            args = [os.fsdecode(part) for part in (entry / "cmdline").read_bytes().split(b"\0") if part]
+        except (OSError, PermissionError, IndexError):
+            continue
+        if any(arg in targets for arg in args) or any(
+            args[i:i + 2] == ["-m", "artin_sentinel.app"] for i in range(len(args) - 1)
+        ):
+            matches.append(int(entry.name))
+    return sorted(matches)
+
+
 @dataclass(slots=True)
 class ReleaseInfo:
     """Compatibility structure kept for the older GitHub Release foundation."""

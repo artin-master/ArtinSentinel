@@ -118,6 +118,7 @@ from .updater import (
     load_update_settings, save_update_settings, fetch_update_manifest,
     is_newer, mark_checked, should_check_on_startup, stage_update,
     launch_staged_update, resolve_manifest_url,
+    other_sentinel_pids,
 )
 
 
@@ -7108,6 +7109,18 @@ class MainWindow(QMainWindow):
 
     def update_stage_ready(self, staged: StagedUpdate):
         self.staged_update = staged
+        others = other_sentinel_pids(os.getpid())
+        if others:
+            self._set_update_busy(False)
+            self.update_status_label.setText("Instalação aguardando fechamento de outra instância do Sentinel")
+            QMessageBox.warning(
+                self, "Feche outras janelas",
+                "Outro processo do Artin Sentinel ainda está aberto (PID: "
+                + ", ".join(map(str, others)) + ").\n\n"
+                "Feche todas as janelas do Sentinel e clique novamente em Instalar atualização. "
+                "O pacote validado poderá ser baixado novamente, se necessário.",
+            )
+            return
         verification = "SHA-256 validado"
         if staged.signature_verified:
             verification += " • assinatura Ed25519 validada"
@@ -7126,6 +7139,13 @@ class MainWindow(QMainWindow):
             self.update_status_label.setText(
                 f"Pacote {staged.version} permanece verificado em cache. A instalação não foi iniciada."
             )
+            return
+        others = other_sentinel_pids(os.getpid())
+        if others:
+            self._set_update_busy(False)
+            QMessageBox.warning(self, "Feche outras janelas",
+                                "Outra instância do Sentinel continua aberta (PID: "
+                                + ", ".join(map(str, others)) + "). Feche-a e tente novamente.")
             return
         try:
             launch_staged_update(staged, os.getpid())

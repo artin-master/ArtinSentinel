@@ -7,7 +7,7 @@ BIN="$HOME/.local/bin"
 APPS="$HOME/.local/share/applications"
 ICONS="$HOME/.local/share/icons/hicolor/512x512/apps"
 DATA="$HOME/.local/share/artin-sentinel"
-NEW_VERSION="0.2.89"
+NEW_VERSION="0.2.90"
 PREV_VERSION=""
 
 CHECK_ONLY=0
@@ -117,8 +117,12 @@ for entry in Path("/proc").iterdir():
     try:
         if entry.stat().st_uid != os.getuid():
             continue
+        # A terminated process can briefly remain as a zombie in /proc.
+        # It no longer has the application open and must not block an update.
+        if (entry / "stat").read_text().split(") ", 1)[1][0] == "Z":
+            continue
         argv = [os.fsdecode(item) for item in (entry / "cmdline").read_bytes().split(b"\0") if item]
-    except (OSError, PermissionError):
+    except (OSError, PermissionError, IndexError):
         continue
     if any(arg in targets for arg in argv) or any(
         argv[i:i + 2] == ["-m", "artin_sentinel.app"] for i in range(len(argv) - 1)
