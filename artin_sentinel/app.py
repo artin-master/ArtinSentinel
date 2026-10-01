@@ -7268,6 +7268,7 @@ class MainWindow(QMainWindow):
             attentions += device["status"] == "offline"
 
         if hasattr(self, "device_inventory_count"):
+            self._device_inventory_online_count = online
             self.device_inventory_count.setText(f"{len(devices)} cadastrado(s) • {online} online")
 
         if hasattr(self, "device_filter"):
@@ -7708,12 +7709,26 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "dev_table"):
             return
         query = (text if isinstance(text, str) else "").strip().casefold()
+        visible = 0
         for row in range(self.dev_table.rowCount()):
             haystack = " ".join(
                 (self.dev_table.item(row, col).text() if self.dev_table.item(row, col) else "")
                 for col in range(self.dev_table.columnCount())
             ).casefold()
-            self.dev_table.setRowHidden(row, bool(query and query not in haystack))
+            hidden = bool(query and query not in haystack)
+            self.dev_table.setRowHidden(row, hidden)
+            visible += not hidden
+        if hasattr(self, "device_inventory_count") and hasattr(self, "_device_inventory_online_count"):
+            if query:
+                self.device_inventory_count.setText(
+                    f"{visible} de {self.dev_table.rowCount()} exibidos • "
+                    f"{self._device_inventory_online_count} online"
+                )
+            else:
+                self.device_inventory_count.setText(
+                    f"{self.dev_table.rowCount()} cadastrado(s) • "
+                    f"{self._device_inventory_online_count} online"
+                )
 
     def _selected_device_profile_key(self, device) -> str:
         try:

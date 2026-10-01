@@ -45,6 +45,14 @@ def populate_table(table):
         table.setItem(0, column, QTableWidgetItem(f"value-{column}"))
 
 
+def populate_inventory(table, names):
+    table.setRowCount(len(names))
+    for row, name in enumerate(names):
+        for column in range(table.columnCount()):
+            value = name if column == 0 else f"field-{row}-{column}"
+            table.setItem(row, column, QTableWidgetItem(value))
+
+
 @pytest.mark.parametrize("table_name", ["devices_found_table", "dev_table"])
 def test_equipment_cells_cannot_be_edited_inline(equipment_window, table_name):
     window, application = equipment_window
@@ -85,3 +93,51 @@ def test_equipment_selection_double_click_and_context_menu_are_preserved(equipme
     position = QPoint(10, 10)
     window.dev_table.customContextMenuRequested.emit(position)
     window.show_device_context_menu.assert_called_once_with(position)
+
+
+@pytest.mark.parametrize(
+    "query,visible_count",
+    [
+        ("camera", 2),
+        ("not-found", 0),
+        ("  camera  ", 2),
+        ("CAMERA", 2),
+    ],
+)
+def test_inventory_filter_counter_shows_visible_and_total(equipment_window, query, visible_count):
+    window, _application = equipment_window
+    populate_inventory(window.dev_table, ["Camera Hall", "sensor 2", "CAMERA garage", "DVR Loja"])
+    window._device_inventory_online_count = 3
+
+    window.refresh_device_filter(query)
+
+    assert sum(not window.dev_table.isRowHidden(row) for row in range(4)) == visible_count
+    assert window.device_inventory_count.text() == f"{visible_count} de 4 exibidos • 3 online"
+
+
+def test_clearing_inventory_filter_restores_site_counter(equipment_window):
+    window, _application = equipment_window
+    populate_inventory(window.dev_table, ["Camera Hall", "sensor 2", "CAMERA garage", "DVR Loja"])
+    window._device_inventory_online_count = 3
+
+    window.device_filter.setText("camera")
+    assert window.device_inventory_count.text() == "2 de 4 exibidos • 3 online"
+
+    window.device_filter.clear()
+    assert window.device_inventory_count.text() == "4 cadastrado(s) • 3 online"
+    assert all(not window.dev_table.isRowHidden(row) for row in range(4))
+
+
+def test_inventory_counter_updates_when_rows_change_with_filter_active(equipment_window):
+    window, _application = equipment_window
+    populate_inventory(window.dev_table, ["Camera Hall", "DVR Loja"])
+    window._device_inventory_online_count = 1
+
+    window.device_filter.setText("camera")
+    assert window.device_inventory_count.text() == "1 de 2 exibidos • 1 online"
+
+    window.dev_table.item(1, 0).setText("Camera Garage")
+    window.refresh_device_filter(window.device_filter.text())
+
+    assert window.device_inventory_count.text() == "2 de 2 exibidos • 1 online"
+    assert all(not window.dev_table.isRowHidden(row) for row in range(2))
