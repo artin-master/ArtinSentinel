@@ -7644,17 +7644,26 @@ class MainWindow(QMainWindow):
         for label, widget in [("Acesso", access), ("", access_help), ("Nome", name), ("IP/host", ip), ("Tipo", kind), ("Protocolo do gravador", protocol), ("Web URL", web), ("RTSP URL", rtsp)]:
             form.addRow(label, widget)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(dialog.accept)
+        host = web_url = rtsp_url = ""
+        def validate_and_accept():
+            nonlocal host, web_url, rtsp_url
+            field = ip
+            try:
+                host = validate_recorder_host(ip.text())
+                field = web
+                web_url = validate_endpoint_url(web.text(), schemes=("http", "https"))
+                field = rtsp
+                rtsp_url = validate_endpoint_url(rtsp.text(), schemes=("rtsp", "rtsps"))
+            except ValueError as exc:
+                QMessageBox.warning(dialog, "Endereço do equipamento", str(exc))
+                field.setFocus()
+                field.selectAll()
+                return
+            dialog.accept()
+        buttons.accepted.connect(validate_and_accept)
         buttons.rejected.connect(dialog.reject)
         form.addRow(buttons)
         if dialog.exec() == QDialog.Accepted:
-            try:
-                host = validate_recorder_host(ip.text())
-                web_url = validate_endpoint_url(web.text(), schemes=("http", "https"))
-                rtsp_url = validate_endpoint_url(rtsp.text(), schemes=("rtsp", "rtsps"))
-            except ValueError as exc:
-                QMessageBox.warning(self, "Endereço do equipamento", str(exc))
-                return
             try:
                 device_kind = DeviceKind(kind.currentData())
             except Exception:
