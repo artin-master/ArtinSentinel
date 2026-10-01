@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 from datetime import datetime, timezone
+from ipaddress import ip_address
 from pathlib import Path
 
 from .domain import Device
@@ -134,7 +136,50 @@ class Database:
         self._migrate_0219()
         self._migrate_0220()
         self._migrate_0226()
+        self._migrate_web_services()
         self.ensure_default_site()
+
+    def _migrate_web_services(self):
+        """Keep Web confirmation evidence separate from configured URL hints."""
+        self.conn.executescript("""
+            CREATE TABLE IF NOT EXISTS device_web_services (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                endpoint_id INTEGER NOT NULL,
+                scheme TEXT NOT NULL CHECK (scheme IN ('http', 'https')),
+                port INTEGER NOT NULL CHECK (port BETWEEN 1 AND 65535),
+                first_checked_at TEXT NOT NULL,
+                last_checked_at TEXT NOT NULL,
+                first_confirmed_at TEXT,
+                last_confirmed_at TEXT,
+                last_failed_at TEXT,
+                last_outcome TEXT NOT NULL CHECK (last_outcome IN ('confirmed', 'failed')),
+                last_http_status INTEGER CHECK (last_http_status BETWEEN 200 AND 599),
+                last_tls_status TEXT NOT NULL
+                    CHECK (last_tls_status IN ('not_applicable', 'verified', 'unverified')),
+                last_error_code TEXT NOT NULL DEFAULT ''
+                    CHECK (last_error_code IN ('', 'timeout', 'connection_error',
+                                              'tls_error', 'invalid_response', 'other_error')),
+                consecutive_failures INTEGER NOT NULL DEFAULT 0 CHECK (consecutive_failures >= 0),
+                UNIQUE (endpoint_id, scheme, port),
+                FOREIGN KEY (endpoint_id) REFERENCES device_endpoints(id) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS device_web_service_checks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                service_id INTEGER NOT NULL,
+                checked_at TEXT NOT NULL,
+                outcome TEXT NOT NULL CHECK (outcome IN ('confirmed', 'failed')),
+                http_status INTEGER CHECK (http_status BETWEEN 200 AND 599),
+                tls_status TEXT NOT NULL
+                    CHECK (tls_status IN ('not_applicable', 'verified', 'unverified')),
+                error_code TEXT NOT NULL DEFAULT ''
+                    CHECK (error_code IN ('', 'timeout', 'connection_error',
+                                         'tls_error', 'invalid_response', 'other_error')),
+                latency_ms REAL CHECK (latency_ms >= 0),
+                FOREIGN KEY (service_id) REFERENCES device_web_services(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_web_service_checks_history
+                ON device_web_service_checks(service_id, checked_at, id);
+        """)
 
     def _column_names(self, table: str) -> set[str]:
         return {row["name"] for row in self.conn.execute(f"PRAGMA table_info({table})")}
@@ -457,6 +502,147 @@ class Database:
             """SELECT * FROM device_endpoints WHERE device_id=?
                ORDER BY is_primary DESC, ip""", (device_id,)
         ))
+
+    def get_device_endpoint(self, device_id: int, ip: str):
+        """Locate an existing endpoint without creating or confirming one."""
+        target = str(ip).strip().lower()
+        for endpoint in self.list_device_endpoints(device_id):
+            if str(endpoint["ip"]).strip().lower() == target:
+                return endpoint
+        return None
+
+    def record_web_service_check(
+        self, endpoint_id: int, *, ip: str, scheme: str, port: int,
+        confirmed: bool, http_status: int | None = None,
+        tls_status: str = "not_applicable", error_code: str = "",
+        latency_ms: float | None = None, transient: bool = False,
+    ) -> int:
+        """Atomically record structured evidence, never a URL or response text.
+
+        A failure keeps earlier confirmations. Only literal IP endpoints can be
+        persisted; callers must mark temporary tunnel results as transient.
+        Unknown error text is reduced to a fixed code before touching SQLite.
+        """
+        endpoint = self.conn.execute(
+            "SELECT * FROM device_endpoints WHERE id=?", (endpoint_id,)
+        ).fetchone()
+        if endpoint is None:
+            raise ValueError("Endpoint inexistente.")
+        try:
+            address = ip_address(ip)
+            endpoint_address = ip_address(endpoint["ip"])
+        except ValueError:
+            raise ValueError("A confirmação persistida exige um IP literal.") from None
+        if address != endpoint_address:
+            raise ValueError("A tentativa não pertence ao IP do endpoint.")
+        mapped = getattr(address, "ipv4_mapped", None)
+        if transient or address.is_loopback or address.is_unspecified or (mapped and mapped.is_loopback):
+            raise ValueError("Serviços de loopback ou endpoints transitórios não são persistidos.")
+        owner = self.get_device(int(endpoint["device_id"]))
+        if owner is None:
+            raise ValueError("Equipamento do endpoint inexistente.")
+        owners = [owner]
+        if int(owner["correlated_to"] or 0):
+            canonical = self.get_device(int(owner["correlated_to"]))
+            if canonical is not None:
+                owners.append(canonical)
+        for device in owners:
+            metadata = json.loads(device["metadata_json"] or "{}")
+            if isinstance(metadata, dict) and metadata.get("connection_mode") == "site_connector":
+                raise ValueError("Serviços de endpoints de túnel não são persistidos.")
+        if scheme not in ("http", "https") or type(port) is not int or not 1 <= port <= 65535:
+            raise ValueError("Esquema ou porta Web inválidos.")
+        if type(confirmed) is not bool:
+            raise ValueError("O resultado da confirmação deve ser booleano.")
+        if confirmed:
+            if type(http_status) is not int or not 200 <= http_status <= 599:
+                raise ValueError("A confirmação exige um status HTTP válido.")
+        elif http_status is not None:
+            raise ValueError("Uma resposta HTTP válida deve ser registrada como confirmação.")
+        allowed_tls = ("not_applicable",) if scheme == "http" else ("verified", "unverified")
+        if tls_status not in allowed_tls:
+            raise ValueError("Estado TLS incompatível com o esquema.")
+        if latency_ms is not None and (
+            type(latency_ms) not in (int, float) or not math.isfinite(latency_ms) or latency_ms < 0
+        ):
+            raise ValueError("Latência inválida.")
+        allowed_errors = {"timeout", "connection_error", "tls_error", "invalid_response", "other_error"}
+        safe_error = ""
+        if not confirmed:
+            safe_error = error_code if isinstance(error_code, str) and error_code in allowed_errors else "other_error"
+        checked_at = utcnow()
+        outcome = "confirmed" if confirmed else "failed"
+        with self.conn:
+            self.conn.execute("""
+                INSERT INTO device_web_services (
+                    endpoint_id,scheme,port,first_checked_at,last_checked_at,
+                    first_confirmed_at,last_confirmed_at,last_failed_at,last_outcome,
+                    last_http_status,last_tls_status,last_error_code,consecutive_failures
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(endpoint_id,scheme,port) DO UPDATE SET
+                    last_checked_at=excluded.last_checked_at,
+                    first_confirmed_at=COALESCE(device_web_services.first_confirmed_at,
+                                                excluded.first_confirmed_at),
+                    last_confirmed_at=COALESCE(excluded.last_confirmed_at,
+                                               device_web_services.last_confirmed_at),
+                    last_failed_at=COALESCE(excluded.last_failed_at,device_web_services.last_failed_at),
+                    last_outcome=excluded.last_outcome,
+                    last_http_status=excluded.last_http_status,
+                    last_tls_status=excluded.last_tls_status,
+                    last_error_code=excluded.last_error_code,
+                    consecutive_failures=CASE WHEN excluded.last_outcome='confirmed' THEN 0
+                                              ELSE device_web_services.consecutive_failures+1 END
+            """, (
+                endpoint_id, scheme, port, checked_at, checked_at,
+                checked_at if confirmed else None, checked_at if confirmed else None,
+                None if confirmed else checked_at, outcome, http_status, tls_status,
+                safe_error, 0 if confirmed else 1,
+            ))
+            service_id = int(self.conn.execute(
+                "SELECT id FROM device_web_services WHERE endpoint_id=? AND scheme=? AND port=?",
+                (endpoint_id, scheme, port),
+            ).fetchone()["id"])
+            self.conn.execute("""
+                INSERT INTO device_web_service_checks (
+                    service_id,checked_at,outcome,http_status,tls_status,error_code,latency_ms
+                ) VALUES (?,?,?,?,?,?,?)
+            """, (service_id, checked_at, outcome, http_status, tls_status, safe_error, latency_ms))
+        return service_id
+
+    def list_device_web_services(self, device_id: int, confirmed_only: bool = True):
+        device = self.get_device(int(device_id))
+        if device is None:
+            return []
+        group_ids = self.correlated_device_ids(int(device_id))
+        placeholders = ",".join("?" for _ in group_ids)
+        confirmation_filter = "AND s.last_confirmed_at IS NOT NULL" if confirmed_only else ""
+        return list(self.conn.execute(f"""
+            SELECT s.*, e.ip AS endpoint_ip, e.is_primary
+            FROM device_web_services s JOIN device_endpoints e ON e.id=s.endpoint_id
+            WHERE e.device_id IN ({placeholders}) {confirmation_filter}
+            ORDER BY e.is_primary DESC, e.ip, s.scheme, s.port
+        """, group_ids))
+
+    def list_web_service_checks(self, service_id: int, limit: int = 100):
+        if type(limit) is not int or limit < 1:
+            raise ValueError("O limite de histórico deve ser um inteiro positivo.")
+        return list(self.conn.execute("""
+            SELECT * FROM device_web_service_checks WHERE service_id=?
+            ORDER BY checked_at DESC, id DESC LIMIT ?
+        """, (service_id, limit)))
+
+    def _delete_endpoint_web_services(self, endpoint_ids):
+        if not endpoint_ids:
+            return
+        placeholders = ",".join("?" for _ in endpoint_ids)
+        self.conn.execute(f"""
+            DELETE FROM device_web_service_checks WHERE service_id IN (
+                SELECT id FROM device_web_services WHERE endpoint_id IN ({placeholders})
+            )
+        """, endpoint_ids)
+        self.conn.execute(
+            f"DELETE FROM device_web_services WHERE endpoint_id IN ({placeholders})", endpoint_ids,
+        )
 
     def correlated_device_ids(self, device_id: int) -> list[int]:
         device_id = int(device_id)
@@ -872,6 +1058,10 @@ class Database:
         self.conn.execute(f"DELETE FROM observations WHERE device_id IN ({placeholders})", group_ids)
         self.conn.execute(f"DELETE FROM recorder_channels WHERE device_id IN ({placeholders})", group_ids)
         self.conn.execute(f"DELETE FROM events WHERE device_id IN ({placeholders})", group_ids)
+        endpoint_ids = [int(row["id"]) for row in self.conn.execute(
+            f"SELECT id FROM device_endpoints WHERE device_id IN ({placeholders})", group_ids,
+        )]
+        self._delete_endpoint_web_services(endpoint_ids)
         self.conn.execute("DELETE FROM device_endpoints WHERE device_id=?", (canonical_id,))
         # Historical secondary rows may still own seed endpoint rows if an old
         # migration was interrupted; remove them too before deleting devices.
