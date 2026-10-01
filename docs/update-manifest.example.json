@@ -1,0 +1,19 @@
+{
+  "schema": "artin-update-manifest-v1",
+  "app_id": "artin-sentinel",
+  "channel": "stable",
+  "version": "0.2.28",
+  "title": "Update Center + ArtinUpdates",
+  "notes": [
+    "Centro de Atualizações",
+    "SHA-256 obrigatório",
+    "Instalação coordenada"
+  ],
+  "published_at": "2026-09-20T00:00:00Z",
+  "release_url": "https://github.com/ORG/REPO/releases/tag/v0.2.28",
+  "package": {
+    "url": "https://github.com/ORG/REPO/releases/download/v0.2.28/ArtinSentinel_0.2.28_focus_recovery_official_updates_talkback.zip",
+    "sha256": "REPLACE_WITH_64_HEX_SHA256",
+    "size": 0
+  }
+}

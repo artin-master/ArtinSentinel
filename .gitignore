@@ -1,0 +1,34 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Virtual environments and local environment settings
+.venv/
+venv/
+env/
+ENV/
+.env
+.env.*
+!.env.example
+ARTIN_PUBLISHER.json
+
+# Test and build output
+test-results/
+junit*.xml
+build/
+dist/
+*.egg-info/
+
+# Temporary files, logs, and operating-system metadata
+*.tmp
+*.log
+.DS_Store
+Thumbs.db
