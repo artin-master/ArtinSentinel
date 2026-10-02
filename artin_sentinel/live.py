@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import json
 import queue
+import select
 import re
 from functools import lru_cache
 import shutil
@@ -1313,9 +1314,27 @@ class LiveStreamSession:
         ]
 
     @staticmethod
-    def _read_exact(stream, size: int, stop_event: threading.Event) -> bytes:
+    def _read_exact(stream, size: int, stop_event: threading.Event,
+                    inactivity_timeout: float = 15.0) -> bytes:
+        # FFmpeg may keep the pipe open without producing another frame. Its
+        # input timeout is not supported by every build, so bound this read as
+        # well. BytesIO/non-file test readers keep their ordinary read contract.
+        try:
+            descriptor = stream.fileno()
+        except (AttributeError, OSError, ValueError):
+            descriptor = None
+        deadline = time.monotonic() + max(0.01, float(inactivity_timeout))
         buf = bytearray()
         while len(buf) < size and not stop_event.is_set():
+            if descriptor is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                ready, _, _ = select.select([descriptor], [], [], min(0.2, remaining))
+                if not ready:
+                    continue
+            if stop_event.is_set():
+                break
             chunk = stream.read(size - len(buf))
             if not chunk:
                 break

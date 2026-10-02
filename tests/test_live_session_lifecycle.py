@@ -134,3 +134,35 @@ def test_wrapper_always_finishes_on_decoder_exception(monkeypatch):
     assert "ValueError" in " ".join(session.drain_diagnostics())
     assert session.finished
     assert session._process is None
+
+
+def test_open_pipe_without_frames_is_bounded_even_when_ffmpeg_input_timeout_is_absent():
+    child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(20)'],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        assert live.LiveStreamSession._read_exact(child.stdout, 3, threading.Event(),
+                                                 inactivity_timeout=0.05) == b''
+        assert child.poll() is None  # EOF was not required to trigger recovery.
+    finally:
+        terminate_media_process(child)
+
+
+def test_close_cancels_frame_wait_without_waiting_for_remote_output():
+    child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(20)'],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    cancelled = threading.Event()
+    entered = threading.Event()
+    results = []
+    def read():
+        entered.set()
+        results.append(live.LiveStreamSession._read_exact(child.stdout, 3, cancelled))
+    worker = threading.Thread(target=read)
+    try:
+        worker.start()
+        assert entered.wait(1)
+        cancelled.set()
+        worker.join(1)
+        assert not worker.is_alive() and results == [b'']
+    finally:
+        terminate_media_process(child)
+        worker.join(1)
