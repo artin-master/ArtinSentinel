@@ -77,7 +77,10 @@ from .ip_camera import scan_direct_camera_streams, DirectCameraScanResult
 from .credential_store import CredentialStore
 from .app_auth import AppAuth
 from .media_process import wait_media_sessions, media_session_chain
-from .live import LiveStreamSession, LiveAudioSession, create_live_stream_session, local_media_status, ordered_audio_urls
+from .live import (
+    LiveStreamSession, LiveAudioSession, create_live_stream_session,
+    local_media_status, ordered_audio_urls, live_session_can_pause_reconnect,
+)
 from .log_viewer import sanitize_log_text, read_log_tail, filter_log_lines
 from .stream_diagnostics import diagnose_saved_streams, STATE_LABELS as STREAM_STATE_LABELS
 from .private_update_auth import store_token
@@ -3440,11 +3443,14 @@ class MainWindow(QMainWindow):
                     self._refresh_live_selection_from_tile(tile)
                 pix = tile.body.pixmap()
                 stream_failed = status.startswith(("Sem vídeo", "Host temporariamente inacessível"))
-                if stream_failed or getattr(session, "last_error_class", "") in {"frame_timeout", "truncated_frame"}:
+                terminal_failure = getattr(session, "current_state", "") in {"unavailable", "authentication"}
+                if stream_failed or terminal_failure or getattr(session, "last_error_class", "") in {"frame_timeout", "truncated_frame"}:
                     # Do not leave the last decoded image looking live while this
                     # tile's own worker is recovering its RTSP/decoder session.
                     tile.body.setPixmap(QPixmap())
-                    tile.body.setText(status if stream_failed else "Sem frames • recuperando este canal…")
+                    tile.body.setText(
+                        status if stream_failed or terminal_failure else "Sem frames • recuperando este canal…"
+                    )
                 elif "AO VIVO" not in status and (pix is None or pix.isNull()):
                     tile.body.setText(status)
             for line in session.drain_diagnostics():
@@ -4633,7 +4639,7 @@ class MainWindow(QMainWindow):
             rename = QAction("Renomear câmera / canal", self)
             rename.triggered.connect(lambda: self.rename_channel_by_id(device_id, channel_id))
             menu.addAction(rename)
-            if tile.index in self.live_sessions:
+            if live_session_can_pause_reconnect(self.live_sessions.get(tile.index)):
                 reconnect = QAction("Pausar reconexão automática", self)
                 reconnect.triggered.connect(lambda: self.pause_tile_reconnect(tile))
             else:

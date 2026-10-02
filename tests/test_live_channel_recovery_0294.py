@@ -60,6 +60,24 @@ def test_closed_tile_session_does_not_schedule_a_retry(monkeypatch):
     assert session.current_state == "stopped"
 
 
+def test_ongoing_stream_failure_stops_after_bounded_backoff_and_can_be_reopened(monkeypatch):
+    session = live.LiveStreamSession("rtsp://camera/main")
+    session.ever_had_frame = True
+    attempts, waits = [], []
+    monkeypatch.setattr(live.LiveStreamSession, "decoder_available", property(lambda _self: True))
+    monkeypatch.setattr(session, "_attempt_profile", lambda *_args: attempts.append(True) or False)
+    monkeypatch.setattr(session._stop, "wait", lambda delay: waits.append(delay) or False)
+    session._run()
+    assert len(attempts) == live.MAX_LIVE_RECONNECT_FAILURES
+    assert len(waits) == live.MAX_LIVE_RECONNECT_FAILURES - 1
+    assert session.current_state == "unavailable"
+    assert "reconexão pausada" in (session.latest_status() or "")
+    assert not live.live_session_can_pause_reconnect(session)
+    retrying = live.LiveStreamSession("rtsp://camera/other")
+    retrying.current_state = "retrying"
+    assert live.live_session_can_pause_reconnect(retrying)
+
+
 def test_ffmpeg_stderr_classifier_separates_network_decoder_and_authentication():
     assert live.classify_live_ffmpeg_error("Connection timed out") == ("network", "rede/RTSP")
     assert live.classify_live_ffmpeg_error("Error while decoding MB 0 1") == ("decoder", "decoder/fluxo")

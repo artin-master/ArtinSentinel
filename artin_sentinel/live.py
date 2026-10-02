@@ -21,6 +21,17 @@ FRAME_WIDTH = 640
 FRAME_HEIGHT = 360
 FRAME_SIZE = FRAME_WIDTH * FRAME_HEIGHT * 3
 FRAME_INACTIVITY_TIMEOUT = 15.0
+MAX_LIVE_RECONNECT_FAILURES = 12
+
+
+def live_session_can_pause_reconnect(session) -> bool:
+    """Whether the tile worker currently owns an automatic retry loop."""
+    if session is None:
+        return False
+    state = str(getattr(session, "current_state", "") or "")
+    return not bool(getattr(session, "finished", False)) and state not in {
+        "unavailable", "authentication", "stopped", "idle",
+    }
 
 
 def classify_live_ffmpeg_error(text: str) -> tuple[str, str]:
@@ -1569,6 +1580,16 @@ class LiveStreamSession:
             if network_problem:
                 network_failures += 1
                 consecutive_failures = 0
+                if network_failures >= MAX_LIVE_RECONNECT_FAILURES:
+                    self.current_state = "unavailable"
+                    self._push_status(
+                        f"Canal indisponível • reconexão pausada após {network_failures} falhas"
+                    )
+                    self._push_diag(
+                        f"Rede/RTSP sem recuperação após {network_failures} tentativas; "
+                        "reconexão automática pausada para este canal. Reabra-o manualmente após verificar a fonte/rede."
+                    )
+                    break
                 schedule = (3.0, 8.0, 15.0, 30.0)
                 delay = schedule[min(network_failures - 1, len(schedule) - 1)]
                 reason = self._network_failure_detail or "host/rede inacessível"
@@ -1607,6 +1628,16 @@ class LiveStreamSession:
                     self._push_status("Stream não validado • reconexão parada")
                     self._push_diag(
                         f"Nenhum frame após {consecutive_failures} ciclo(s); reconexão automática interrompida para evitar loop contínuo."
+                    )
+                    break
+                if consecutive_failures >= MAX_LIVE_RECONNECT_FAILURES:
+                    self.current_state = "unavailable"
+                    self._push_status(
+                        f"Canal indisponível • reconexão pausada após {consecutive_failures} falhas"
+                    )
+                    self._push_diag(
+                        f"Sem frame após {consecutive_failures} tentativas; reconexão automática pausada "
+                        "para este canal. Reabra-o manualmente após verificar a fonte, rede ou decoder."
                     )
                     break
                 if consecutive_failures <= 3:
