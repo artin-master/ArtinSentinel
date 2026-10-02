@@ -30,7 +30,7 @@ def test_microphone_preferences_roundtrip_and_gain_clamp(tmp_path):
     (tmp_path / "audio-input-settings.json").write_text(
         '{"backend":"pulse","source":"default","gain_db":99}', encoding="utf-8"
     )
-    assert talkback.load_audio_input_preferences(tmp_path).gain_db == 9
+    assert talkback.load_audio_input_preferences(tmp_path).gain_db == 6.0206
 
 
 def test_logitech_style_pulse_source_and_gain_build_g711a_command(monkeypatch):
@@ -46,7 +46,7 @@ def test_logitech_style_pulse_source_and_gain_build_g711a_command(monkeypatch):
     assert label == "Webcam C270 Mono"
     assert cmd[cmd.index("-f") + 1] == "pulse"
     assert cmd[cmd.index("-i") + 1] == source
-    assert cmd[cmd.index("-af") + 1] == "volume=6dB"
+    assert cmd[cmd.index("-af") + 1] == "volume=6dB,alimiter=limit=0.95:level=false"
     assert cmd[cmd.index("-ac") + 1] == "1"
     assert cmd[cmd.index("-ar") + 1] == "8000"
     assert cmd[cmd.index("-c:a") + 1] == "pcm_alaw"

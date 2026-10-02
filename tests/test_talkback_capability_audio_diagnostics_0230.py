@@ -51,7 +51,7 @@ def test_microphone_level_probe_parses_ffmpeg_volumedetect(monkeypatch):
     assert result.ok is True
     assert result.mean_db == -28.4
     assert result.peak_db == -8.2
-    assert "volume=6dB,volumedetect" in seen["cmd"]
+    assert "volume=6dB,alimiter=limit=0.95:level=false,volumedetect" in seen["cmd"]
     assert mic.source in seen["cmd"]
 
 

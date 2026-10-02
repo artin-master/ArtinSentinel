@@ -12,9 +12,10 @@ def test_release_0224():
 
 def test_audio_slider_has_real_gain_above_unity():
     assert live.audio_gain_for_slider(0) == 0.0
-    assert live.audio_gain_for_slider(75) == 1.0
+    assert 0.0 < live.audio_gain_for_slider(10) < live.audio_gain_for_slider(20)
+    assert live.audio_gain_for_slider(30) < live.audio_gain_for_slider(50)
+    assert live.audio_gain_for_slider(50) < live.audio_gain_for_slider(80)
     assert live.audio_gain_for_slider(100) == 2.0
-    assert 0.65 < live.audio_gain_for_slider(50) < 0.68
 
 
 def test_audio_commands_use_dynamic_volume_safe_unity_filter_when_pactl_exists(monkeypatch):
@@ -73,4 +74,5 @@ def test_main_volume_slider_uses_dynamic_non_restart_semantics():
     assert "self.audio_volume_slider.setTracking(True)" in source
     assert "session.set_volume(value)" in source
     assert "session.restart_with_volume(value)" not in source
-    assert "75 = nível original" in source
+    assert "curva perceptual" in source
+    assert "0 = mudo" in source and "100 = máximo normal" in source

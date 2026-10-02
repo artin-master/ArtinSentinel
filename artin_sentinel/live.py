@@ -344,19 +344,13 @@ def probe_rtsp_media_capabilities(
 
 
 def audio_gain_for_slider(value: int) -> float:
-    """Map the 0..100 UI slider to useful listening gain.
-
-    CCTV microphone tracks are frequently recorded at conservative levels.
-    The old implementation mapped 75 to 0.75x and 100 to 1.0x, so the control
-    could only attenuate. 0.2.24 makes 75 the unity point and reserves the top
-    quarter for moderate amplification up to 2.0x (+6 dB).
-    """
+    """Map listening level perceptually while preserving the existing 2x ceiling."""
     value = max(0, min(int(value), 100))
-    if value <= 0:
+    if value == 0:
         return 0.0
-    if value <= 75:
-        return value / 75.0
-    return 1.0 + ((value - 75) / 25.0)
+    # A power curve provides audible low settings and a smooth rise through
+    # the middle of the control. The 100% endpoint remains the old 2x maximum.
+    return 2.0 * (value / 100.0) ** 2.5
 
 
 def audio_filter_for_slider(value: int) -> str:
@@ -413,9 +407,9 @@ def _pulse_sink_inputs_for_pid(pid: int) -> list[int]:
 def set_process_audio_gain(pid: int, slider_value: int, *, retries: int = 1, retry_delay: float = 0.08, cancel_event: threading.Event | None = None) -> tuple[bool, str]:
     """Apply per-process listening gain through Pulse/PipeWire, without restart.
 
-    ``75`` remains unity and ``100`` remains 2x.  Pulse/PipeWire accepts volume
-    percentages above 100%, so the existing CCTV gain scale can be kept while
-    avoiding the stop/reconnect behaviour of the old FFmpeg filter restart.
+    The perceptual UI curve is converted once to a Pulse/PipeWire percentage;
+    the 100 endpoint remains the established 2x ceiling. This avoids restarting
+    the RTSP player while changing the received-camera listening volume.
     """
     pactl = shutil.which("pactl")
     if not pactl:

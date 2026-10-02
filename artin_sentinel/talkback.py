@@ -14,6 +14,7 @@ import ctypes
 import hashlib
 import http.client
 import json
+import math
 import os
 import select
 import socket
@@ -146,7 +147,7 @@ class MicrophoneInput:
 class AudioInputPreferences:
     backend: str = "pulse"
     source: str = "default"
-    gain_db: int = 0
+    gain_db: float = 0.0
     netsdk_talk_mode: str = "literal-reference"
 
 
@@ -168,10 +169,10 @@ def load_audio_input_preferences(data_directory: Path) -> AudioInputPreferences:
         backend = defaults.backend
     source = str(payload.get("source") or defaults.source).strip() or "default"
     try:
-        gain_db = int(payload.get("gain_db", defaults.gain_db))
+        gain_db = float(payload.get("gain_db", defaults.gain_db))
     except (TypeError, ValueError):
         gain_db = defaults.gain_db
-    gain_db = max(-6, min(gain_db, 9))
+    gain_db = max(-6.0206, min(gain_db, 6.0206))
     netsdk_talk_mode = str(payload.get("netsdk_talk_mode") or defaults.netsdk_talk_mode).strip().lower()
     if netsdk_talk_mode not in {"literal-reference", "literal-reference-wait", "literal-reference-speaker1", "live-pcm-literal", "live-g711a-server"}:
         netsdk_talk_mode = defaults.netsdk_talk_mode
@@ -186,6 +187,40 @@ def save_audio_input_preferences(data_directory: Path, preferences: AudioInputPr
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(asdict(preferences), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     os.replace(tmp, path)
+
+
+def microphone_gain_db_for_percent(value: int) -> float:
+    """Convert independent MIC gain UI percentage to linear amplitude dB."""
+    percent = max(50, min(int(value), 200))
+    return 20.0 * math.log10(percent / 100.0)
+
+
+def microphone_gain_percent_for_db(gain_db: float) -> int:
+    """Convert a stored (legacy-compatible) dB gain to the compact UI value."""
+    try:
+        db = max(-6.0206, min(float(gain_db), 6.0206))
+    except (TypeError, ValueError):
+        db = 0.0
+    return max(50, min(200, round(100.0 * (10.0 ** (db / 20.0)))))
+
+
+def microphone_gain_filters(gain_db: float) -> list[str]:
+    """Apply capture gain and clamp peaks before encoding/transmission.
+
+    At 0 dB this returns no filters, preserving today's signal path exactly.
+    Positive gain runs through FFmpeg's limiter before G.711/PCM output so
+    boosted samples cannot wrap or clip at the encoder input.
+    """
+    try:
+        db = max(-6.0206, min(float(gain_db), 6.0206))
+    except (TypeError, ValueError):
+        db = 0.0
+    if abs(db) < 0.0005:
+        return []
+    filters = [f"volume={db:g}dB"]
+    if db > 0:
+        filters.append("alimiter=limit=0.95:level=false")
+    return filters
 
 
 @lru_cache(maxsize=1)
@@ -317,7 +352,7 @@ class MicrophoneLevelResult:
 
 
 def probe_microphone_level(
-    microphone: MicrophoneInput, *, gain_db: int = 0, duration: float = 1.25
+    microphone: MicrophoneInput, *, gain_db: float = 0.0, duration: float = 1.25
 ) -> MicrophoneLevelResult:
     """Measure one local microphone in a bounded background-friendly FFmpeg probe.
 
@@ -331,11 +366,10 @@ def probe_microphone_level(
     backend = str(microphone.backend or "").lower()
     if backend not in {"pulse", "alsa"}:
         return MicrophoneLevelResult(False, detail=f"backend {backend or '?'} não suportado")
-    gain_db = max(-6, min(int(gain_db), 9))
+    gain_db = max(-6.0206, min(float(gain_db), 6.0206))
     duration = max(0.6, min(float(duration), 3.0))
     filters = []
-    if gain_db:
-        filters.append(f"volume={gain_db}dB")
+    filters.extend(microphone_gain_filters(gain_db))
     filters.append("volumedetect")
     cmd = [
         ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "info",
@@ -445,7 +479,7 @@ class XmDvripTalkbackSession(_CaptureLifecycle):
         microphone_backend: str = "pulse",
         microphone_source: str = "default",
         microphone_label: str = "",
-        gain_db: int = 0,
+        gain_db: float = 0.0,
         max_seconds: float = 18.0,
     ):
         self.host = str(host)
@@ -454,7 +488,7 @@ class XmDvripTalkbackSession(_CaptureLifecycle):
         self.microphone_backend = str(microphone_backend or "pulse").lower()
         self.microphone_source = str(microphone_source or "default")
         self.microphone_label = str(microphone_label or self.microphone_source)
-        self.gain_db = max(-6, min(int(gain_db), 9))
+        self.gain_db = max(-6.0206, min(float(gain_db), 6.0206))
         self.max_seconds = max(3.0, min(float(max_seconds), 30.0))
         self.status: queue.Queue[str] = queue.Queue(maxsize=8)
         self.diagnostics: queue.Queue[str] = queue.Queue(maxsize=24)
@@ -528,7 +562,8 @@ class XmDvripTalkbackSession(_CaptureLifecycle):
         if not ffmpeg:
             return []
         backends = ffmpeg_microphone_inputs()  # background thread only
-        gain_filter = ["-af", f"volume={self.gain_db}dB"] if self.gain_db else []
+        capture_filters = microphone_gain_filters(self.gain_db)
+        gain_filter = ["-af", ",".join(capture_filters)] if capture_filters else []
         common_out = [
             *gain_filter,
             "-ac", "1", "-ar", "8000", "-c:a", "pcm_alaw", "-f", "alaw", "pipe:1",
@@ -617,7 +652,7 @@ class XmDvripTalkbackSession(_CaptureLifecycle):
                 self._push(self.status, "Falando • DVRIP/G.711A")
                 self._push(
                     self.diagnostics,
-                    f"Microfone: {self.microphone_label or self.microphone_source} • ganho {self.gain_db:+d} dB",
+                    f"Microfone: {self.microphone_label or self.microphone_source} • ganho {self.gain_db:+.1f} dB",
                 )
                 started = time.monotonic()
                 sent_any = False
@@ -871,7 +906,7 @@ class IntelbrasHttpTalkbackSession(_CaptureLifecycle):
         self, host: str, username: str, password: str, *, base_url: str = '',
         audio_channel: int = 1, microphone_backend: str = 'pulse',
         microphone_source: str = 'default', microphone_label: str = '',
-        gain_db: int = 0, max_seconds: float = 18.0, framing_mode: str = 'auto',
+        gain_db: float = 0.0, max_seconds: float = 18.0, framing_mode: str = 'auto',
     ):
         self.host = str(host or '')
         self.username = str(username or '')
@@ -881,7 +916,7 @@ class IntelbrasHttpTalkbackSession(_CaptureLifecycle):
         self.microphone_backend = str(microphone_backend or 'pulse').lower()
         self.microphone_source = str(microphone_source or 'default')
         self.microphone_label = str(microphone_label or self.microphone_source)
-        self.gain_db = max(-6, min(int(gain_db), 9))
+        self.gain_db = max(-6.0206, min(float(gain_db), 6.0206))
         self.max_seconds = max(3.0, min(float(max_seconds), 30.0))
         framing_mode = str(framing_mode or 'auto').casefold()
         self.framing_mode = framing_mode if framing_mode in {'auto', 'singlepart', 'multipart'} else 'auto'
@@ -953,7 +988,8 @@ class IntelbrasHttpTalkbackSession(_CaptureLifecycle):
         if not ffmpeg:
             return []
         backends = ffmpeg_microphone_inputs()
-        gain_filter = ['-af', f'volume={self.gain_db}dB'] if self.gain_db else []
+        capture_filters = microphone_gain_filters(self.gain_db)
+        gain_filter = ['-af', ','.join(capture_filters)] if capture_filters else []
         common_out = [*gain_filter, '-ac', '1', '-ar', '8000', '-c:a', 'pcm_alaw', '-f', 'alaw', 'pipe:1']
         commands: list[tuple[str, list[str]]] = []
         def add(backend: str, source: str, label: str) -> None:
@@ -1245,7 +1281,7 @@ class IntelbrasNetSDKTalkbackSession(_CaptureLifecycle):
         microphone_backend: str = "pulse",
         microphone_source: str = "default",
         microphone_label: str = "",
-        gain_db: int = 0,
+        gain_db: float = 0.0,
         max_seconds: float = 18.0,
         channel_index: int = 0,
         test_mode: str = "literal-reference",
@@ -1268,7 +1304,7 @@ class IntelbrasNetSDKTalkbackSession(_CaptureLifecycle):
         self.microphone_backend = str(microphone_backend or "pulse").lower()
         self.microphone_source = str(microphone_source or "default")
         self.microphone_label = str(microphone_label or self.microphone_source)
-        self.gain_db = max(-6, min(int(gain_db), 9))
+        self.gain_db = max(-6.0206, min(float(gain_db), 6.0206))
         self.max_seconds = max(3.0, min(float(max_seconds), 30.0))
         self.channel_index = max(0, int(channel_index or 0))
         normalized_mode = str(test_mode or "literal-reference").strip().lower()
@@ -1343,7 +1379,8 @@ class IntelbrasNetSDKTalkbackSession(_CaptureLifecycle):
         if not ffmpeg:
             return []
         backends = ffmpeg_microphone_inputs()
-        gain_filter = ["-af", f"volume={self.gain_db}dB"] if self.gain_db else []
+        capture_filters = microphone_gain_filters(self.gain_db)
+        gain_filter = ["-af", ",".join(capture_filters)] if capture_filters else []
         if codec == "g711a":
             common_out = [*gain_filter, "-ac", "1", "-ar", "8000", "-c:a", "pcm_alaw", "-f", "alaw", "pipe:1"]
         else:
@@ -1580,7 +1617,7 @@ class IntelbrasNetSDKTalkbackSession(_CaptureLifecycle):
                 if self._stop.is_set():
                     break
                 selected_label = label
-                self._push(self.diagnostics, f"SDK 6/8 • {test_label} • microfone: tentando {label} • ganho {self.gain_db:+d} dB")
+                self._push(self.diagnostics, f"SDK 6/8 • {test_label} • microfone: tentando {label} • ganho {self.gain_db:+.1f} dB")
                 proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
                 if not self._adopt_capture(proc):
                     break

@@ -89,6 +89,7 @@ from .talkback import (
     XmDvripTalkbackSession, IntelbrasHttpTalkbackSession, IntelbrasNetSDKTalkbackSession, MicrophoneInput, AudioInputPreferences,
     discover_microphone_inputs, ffmpeg_microphone_inputs, probe_microphone_level,
     load_audio_input_preferences, save_audio_input_preferences,
+    microphone_gain_db_for_percent, microphone_gain_percent_for_db,
     IMPLEMENTED_TALKBACK_PROTOCOLS, TALKBACK_REASONS, talkback_transport,
     talkback_capability_status, talkback_start_readiness,
 )
@@ -2388,7 +2389,7 @@ class MainWindow(QMainWindow):
         self.audio_volume_slider.setTracking(True)
         self.audio_volume_slider.setValue(self.live_audio_volume)
         self.audio_volume_slider.setEnabled(False)
-        self.audio_volume_slider.setToolTip("Volume do áudio ao vivo • ajuste dinâmico sem reconectar • 75 = nível original • 100 = +6 dB")
+        self.audio_volume_slider.setToolTip("Volume de escuta • curva perceptual • ajuste dinâmico sem reconectar • 0 = mudo • 100 = máximo normal")
         self.audio_volume_slider.valueChanged.connect(self.change_live_audio_volume)
         audio_row.addWidget(self.audio_volume_slider, 1)
         self.talkback_btn = QToolButton()
@@ -2418,18 +2419,22 @@ class MainWindow(QMainWindow):
         self.microphone_combo.addItem("Detectando microfones…", None)
         self.microphone_combo.currentIndexChanged.connect(self.change_microphone_input)
         microphone_layout.addWidget(self.microphone_combo, 0, 1, 1, 3)
-        gain_label = QLabel("GANHO:")
+        gain_label = QLabel("MIC %:")
         gain_label.setMinimumWidth(42)
         microphone_layout.addWidget(gain_label, 1, 0)
-        self.microphone_gain_combo = QComboBox()
-        for label, gain in (("-6 dB", -6), ("0 dB", 0), ("+3 dB", 3), ("+6 dB", 6), ("+9 dB", 9)):
-            self.microphone_gain_combo.addItem(label, gain)
-        gain_index = self.microphone_gain_combo.findData(int(self.audio_input_preferences.gain_db))
-        if gain_index >= 0:
-            self.microphone_gain_combo.setCurrentIndex(gain_index)
-        self.microphone_gain_combo.setToolTip("Ganho aplicado ao microfone antes da codificação G.711 A-law")
-        self.microphone_gain_combo.currentIndexChanged.connect(self.change_microphone_gain)
-        microphone_layout.addWidget(self.microphone_gain_combo, 1, 1)
+        self.microphone_gain_slider = QSlider(Qt.Horizontal)
+        self.microphone_gain_slider.setRange(50, 200)
+        self.microphone_gain_slider.setValue(microphone_gain_percent_for_db(self.audio_input_preferences.gain_db))
+        self.microphone_gain_slider.setToolTip(
+            "Ganho independente do microfone antes da codificação • 100% mantém o nível original • "
+            "acima de 100% aplica limitador para proteger contra clipping"
+        )
+        self.microphone_gain_slider.valueChanged.connect(self.change_microphone_gain)
+        microphone_layout.addWidget(self.microphone_gain_slider, 1, 1, 1, 2)
+        self.microphone_gain_value = QLabel(f"{self.microphone_gain_slider.value()}%")
+        self.microphone_gain_value.setMinimumWidth(38)
+        self.microphone_gain_value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        microphone_layout.addWidget(self.microphone_gain_value, 1, 3)
         self.microphone_refresh_btn = QToolButton()
         self.microphone_refresh_btn.setObjectName("ToolbarIconAction")
         self.microphone_refresh_btn.setText("↻")
@@ -3680,14 +3685,11 @@ class MainWindow(QMainWindow):
         self.refresh_selected_audio_controls()
 
     def change_microphone_gain(self, _index: int = -1):
-        if not hasattr(self, "microphone_gain_combo"):
+        if not hasattr(self, "microphone_gain_slider"):
             return
-        value = self.microphone_gain_combo.currentData()
-        try:
-            gain = int(value)
-        except (TypeError, ValueError):
-            gain = 0
-        self.audio_input_preferences.gain_db = max(-6, min(gain, 9))
+        percent = int(self.microphone_gain_slider.value())
+        self.microphone_gain_value.setText(f"{percent}%")
+        self.audio_input_preferences.gain_db = microphone_gain_db_for_percent(percent)
         save_audio_input_preferences(data_dir(), self.audio_input_preferences)
         self.refresh_selected_audio_controls()
 
@@ -3714,7 +3716,7 @@ class MainWindow(QMainWindow):
             self.audio_capability_label.setText("Encerre o Push-to-Talk antes de testar o microfone local")
             self.audio_capability_label.show()
             return
-        gain = int(self.audio_input_preferences.gain_db)
+        gain = float(self.audio_input_preferences.gain_db)
         self.audio_capability_label.setText(f"Testando {microphone.label} em background…")
         self.audio_capability_label.show()
         if hasattr(self, "microphone_test_btn"):
@@ -3751,9 +3753,9 @@ class MainWindow(QMainWindow):
             peak_db = getattr(result, "peak_db", None)
             mean_text = f"{float(mean_db):.1f} dB" if mean_db is not None else "n/d"
             peak_text = f"{float(peak_db):.1f} dB" if peak_db is not None else "n/d"
-            gain = int(self.audio_input_preferences.gain_db)
+            gain = float(self.audio_input_preferences.gain_db)
             self.audio_capability_label.setText(
-                f"{label} • médio {mean_text} • pico {peak_text} • ganho {gain:+d} dB"
+                f"{label} • médio {mean_text} • pico {peak_text} • MIC {microphone_gain_percent_for_db(gain)}%"
             )
         else:
             self.audio_capability_label.setText(f"Teste do MIC falhou • {detail or 'sem leitura de nível'}")
@@ -3796,6 +3798,7 @@ class MainWindow(QMainWindow):
         talkback_validation = str(info.get("talkback_validation") or "unknown")
         protocol_name_current = str(info.get("talkback_protocol") or "")
         netsdk_talk = protocol_name_current.startswith("intelbras-netsdk-")
+        netsdk_reference = netsdk_talk and str(self.audio_input_preferences.netsdk_talk_mode).startswith("literal-reference")
         if hasattr(self, "netsdk_mode_combo"):
             self.netsdk_mode_combo.setVisible(bool(can_talk and netsdk_talk))
             self.netsdk_mode_label.setVisible(bool(can_talk and netsdk_talk))
@@ -3845,6 +3848,17 @@ class MainWindow(QMainWindow):
         if can_talk and not self.microphone_scan_complete and self.microphone_scan_future is None:
             self.refresh_microphone_inputs_async()
         talk_running = self.talkback_session is not None
+        if hasattr(self, "microphone_gain_slider"):
+            self.microphone_gain_slider.setEnabled(can_talk and not talk_running and not netsdk_reference)
+            if netsdk_reference:
+                self.microphone_gain_slider.setToolTip(
+                    "O modo NetSDK A1–A3 envia a gravação de referência do demo; selecione B ou C para usar o microfone local."
+                )
+            else:
+                self.microphone_gain_slider.setToolTip(
+                    "Ganho independente do microfone antes da codificação • 100% mantém o nível original • "
+                    "acima de 100% aplica limitador para proteger contra clipping"
+                )
         self.talkback_btn.blockSignals(True)
         self.talkback_btn.setChecked(talk_running)
         if talk_running:
@@ -3926,7 +3940,7 @@ class MainWindow(QMainWindow):
                     "color:#78a991;background:transparent;border:0;padding:3px 1px;font-size:9px"
                 )
                 self.audio_capability_label.setText(
-                    f"MIC {validation_text} • {mic_name} • ganho {int(self.audio_input_preferences.gain_db):+d} dB"
+                    f"MIC {validation_text} • {mic_name} • ganho {float(self.audio_input_preferences.gain_db):+.1f} dB"
                 )
             self.audio_capability_label.show()
         elif talkback_pending:
@@ -4340,7 +4354,7 @@ class MainWindow(QMainWindow):
                 microphone_backend=microphone.backend,
                 microphone_source=microphone.source,
                 microphone_label=microphone.label,
-                gain_db=int(self.audio_input_preferences.gain_db),
+                gain_db=float(self.audio_input_preferences.gain_db),
                 channel_index=0,
                 test_mode=str(self.audio_input_preferences.netsdk_talk_mode or "literal-reference"),
             )
@@ -4360,7 +4374,7 @@ class MainWindow(QMainWindow):
                 microphone_backend=microphone.backend,
                 microphone_source=microphone.source,
                 microphone_label=microphone.label,
-                gain_db=int(self.audio_input_preferences.gain_db),
+                gain_db=float(self.audio_input_preferences.gain_db),
             )
             transport_text = "Intelbras HTTP postAudio/G.711A"
         else:
@@ -4369,7 +4383,7 @@ class MainWindow(QMainWindow):
                 microphone_backend=microphone.backend,
                 microphone_source=microphone.source,
                 microphone_label=microphone.label,
-                gain_db=int(self.audio_input_preferences.gain_db),
+                gain_db=float(self.audio_input_preferences.gain_db),
             )
             transport_text = "DVRIP/G.711A"
         self.talkback_session = session
@@ -4381,7 +4395,7 @@ class MainWindow(QMainWindow):
         self.audio_capability_label.show()
         self.append_live_diagnostic(
             tile, f"[{datetime.now().strftime('%H:%M:%S')}] Push-to-Talk solicitado • {transport_text} • "
-            f"{microphone.label} • ganho {int(self.audio_input_preferences.gain_db):+d} dB.",
+            f"{microphone.label} • MIC {microphone_gain_percent_for_db(self.audio_input_preferences.gain_db)}%.",
         )
         session.start()
 
