@@ -13,6 +13,10 @@ from concurrent.futures import ThreadPoolExecutor
 from queue import Queue, Empty
 from importlib.resources import files
 from urllib.parse import urlparse
+from .web_services import (
+    build_web_service_url, is_transient_web_endpoint,
+    web_services_from_checks, ordered_web_services, web_service_candidates,
+)
 
 from PySide6.QtCore import Qt, QTimer, QRunnable, QThreadPool, QObject, Signal, Slot, QUrl, QSize, QSettings, QDateTime
 from PySide6.QtGui import QFont, QIcon, QPixmap, QImage, QAction, QCursor, QDesktopServices, QColor, QPainter, QPen
@@ -66,7 +70,7 @@ from PySide6.QtWidgets import (
 from . import __version__
 from .db import Database, changed_channel_routes
 from .paths import data_dir
-from .services import discover_network_devices, diagnose, diagnose_endpoints
+from .services import discover_network_devices, diagnose, diagnose_endpoints, persist_discovered_web_checks
 from .recorder import scan_intelbras_channels, scan_hikvision_channels, diagnose_hikvision_routes, hikvision_compatibility_report, channels_for_live_view
 from .ip_camera import scan_direct_camera_streams, DirectCameraScanResult
 from .credential_store import CredentialStore
@@ -88,7 +92,7 @@ from .intelbras_netsdk import (
     vendor_install_directory, reference_audio_path,
 )
 from .domain import Device, DeviceKind
-from .remote_access import ACCESS_LOCAL, ACCESS_PRIVATE, ACCESS_CONNECTOR, validate_recorder_host, validate_endpoint_url, discovered_web_url, access_label, preserve_remote_inventory, forwarded_ports
+from .remote_access import ACCESS_LOCAL, ACCESS_PRIVATE, ACCESS_CONNECTOR, validate_recorder_host, validate_endpoint_url, access_label, preserve_remote_inventory, forwarded_ports
 from .akdb import (
     public_summary, audio_capability, ptz_capability, capability_map, recorder_scan_limit,
     recorder_scan_capacity_for_device,
@@ -5140,6 +5144,7 @@ class MainWindow(QMainWindow):
             return
         combo = self.playback_device_combo
         device_id = combo.currentData()
+        self.playback_web_button.setEnabled(bool(device_id is not None and self._device_web_services(device_id)))
         if (getattr(self, "_playback_loaded_device_id", None) == device_id
                 and self.playback_channel_combo.count()):
             return
@@ -5164,7 +5169,6 @@ class MainWindow(QMainWindow):
         self.playback_channel_list.blockSignals(False)
         web_url = QUrl((device["web_url"] or "").strip()) if device else QUrl()
         web_ok = web_url.scheme().lower() in ("http", "https") and bool(web_url.host()) and not web_url.userName() and not web_url.password()
-        self.playback_web_button.setEnabled(web_ok)
         identity = " ".join(str(device[key] or "") for key in ("manufacturer", "provider")) if device else ""
         supported = "intelbras" in identity.lower() or "hikvision" in identity.lower()
         self.playback_access_note.setText(
@@ -5777,13 +5781,12 @@ class MainWindow(QMainWindow):
 
     def open_playback_device_web(self):
         device_id = self.playback_device_combo.currentData()
-        device = self.db.get_device(device_id) if device_id is not None else None
-        url = (device["web_url"] or "").strip() if device else ""
-        target = QUrl(url)
-        if target.scheme().lower() not in ("http", "https") or not target.host() or target.userName() or target.password():
+        if device_id is None:
             return
-        if not QDesktopServices.openUrl(target):
-            QMessageBox.warning(self, "Reprodução", "Não foi possível abrir o gravador no navegador padrão.")
+        site_id = self.current_site_id
+        self._open_web_services(self._device_web_services(device_id),
+                                lambda: self.current_site_id == site_id
+                                and self.playback_device_combo.currentData() == device_id)
 
     # ---------- events / health ----------
     def build_events_page(self):
@@ -7357,6 +7360,8 @@ class MainWindow(QMainWindow):
             try:
                 self.save_live_workspace()
                 self.current_site_id = self.db.add_site(name.strip())
+                self.discovery_web_results = {}
+                self._transient_web_checks = {}
                 self.discovery_results = []
                 self.devices_found_table.setRowCount(0)
                 self.refresh_all()
@@ -7392,6 +7397,8 @@ class MainWindow(QMainWindow):
             return
         self.save_live_workspace()
         self.current_site_id = site_id
+        self.discovery_web_results = {}
+        self._transient_web_checks = {}
         self.discovery_results = []
         self.devices_found_table.setRowCount(0)
         self.devices_found_status.setText("Site alterado; busque equipamentos nesta rede.")
@@ -7885,28 +7892,92 @@ class MainWindow(QMainWindow):
 
     def _sync_selected_device_actions(self):
         device_id = self.selected_device_id()
-        web_ok = False
-        if device_id:
-            device = self.db.get_device(device_id)
-            web_ok = bool(device and (device["web_url"] or "").strip())
+        services = self._device_web_services(device_id) if device_id else []
+        web_ok = bool(services)
         if hasattr(self, "web_button"):
             self.web_button.setEnabled(web_ok)
+            self.web_button.setToolTip(
+                "Confirmação histórica: a última tentativa falhou. Abrir no navegador padrão."
+                if services and services[0]["last_outcome"] != "confirmed"
+                else "Abrir serviço HTTP/HTTPS confirmado no navegador padrão."
+            )
+        if hasattr(self, "playback_web_button"):
+            playback_id = self.playback_device_combo.currentData()
+            self.playback_web_button.setEnabled(bool(playback_id is not None and self._device_web_services(playback_id)))
+
+    def _device_web_services(self, device_id):
+        device = self.db.get_device(device_id)
+        if not device or device["site_id"] != self.current_site_id:
+            return []
+        metadata = json.loads(device["metadata_json"] or "{}")
+        services = []
+        cache = getattr(self, "_transient_web_checks", {})
+        # The storage API also includes historical endpoints of correlated rows.
+        for row in self.db.list_device_web_services(device_id):
+            try:
+                if (not is_transient_web_endpoint(row["endpoint_ip"], metadata)
+                        and (self.current_site_id, device_id, row["endpoint_ip"]) not in cache):
+                    services.append(row)
+            except ValueError:
+                continue
+        for endpoint in self.db.list_device_endpoints(device_id):
+            try:
+                transient = is_transient_web_endpoint(endpoint["ip"], metadata)
+            except ValueError:
+                continue
+            key = (self.current_site_id, device_id, endpoint["ip"])
+            if transient or key in cache:
+                checks = cache.get(key, [])
+                services.extend(web_services_from_checks(checks, is_primary=endpoint["is_primary"], endpoint_ip=endpoint["ip"]))
+        return ordered_web_services(services)
+
+    def _remember_discovered_web_checks(self, device_id, device, checks, *, confirmed_only=False):
+        if not checks:
+            return
+        owner = self.db.get_device(device_id)
+        if not owner or owner["site_id"] != self.current_site_id or device.site_id != self.current_site_id:
+            return
+        metadata = json.loads(owner["metadata_json"] or "{}")
+        if (is_transient_web_endpoint(device.ip, metadata)
+                or is_transient_web_endpoint(device.ip, device.metadata)):
+            if not hasattr(self, "_transient_web_checks"):
+                self._transient_web_checks = {}
+            self._transient_web_checks[(self.current_site_id, device_id, device.ip)] = list(checks)
+        else:
+            persist_discovered_web_checks(self.db, device_id, device, checks, confirmed_only=confirmed_only)
+
+    def _open_web_services(self, services, still_current):
+        services = ordered_web_services(services)
+        if not services:
+            QMessageBox.information(self, "Interface Web", "Nenhum serviço HTTP/HTTPS confirmado para este equipamento.")
+            return
+        selected = services[0]
+        if len(services) > 1:
+            labels = []
+            for service in services:
+                state = ("Confirmação atual" if service["last_outcome"] == "confirmed"
+                         else "Confirmação histórica • falha recente")
+                if service["scheme"] == "https" and service.get("last_tls_status") == "unverified":
+                    state += " • certificado não verificado"
+                labels.append(f"{service['scheme'].upper()} • {service['endpoint_ip']} • porta {service['port']} • {state}")
+            choice, accepted = QInputDialog.getItem(self, "Abrir interface Web", "Selecione o serviço confirmado:", labels, 0, False)
+            if not accepted or choice not in labels:
+                return
+            selected = services[labels.index(choice)]
+        if not still_current():
+            return
+        url = build_web_service_url(selected["endpoint_ip"], selected["scheme"], selected["port"])
+        if not QDesktopServices.openUrl(QUrl(url)):
+            QMessageBox.warning(self, "Interface Web", "Não foi possível abrir a interface Web no navegador padrão.")
 
     def open_selected_device_web(self):
         device_id = self.selected_device_id()
         if not device_id:
             QMessageBox.information(self, "Interface Web", "Selecione um equipamento na tabela.")
             return
-        device = self.db.get_device(device_id)
-        url = (device["web_url"] or "").strip() if device else ""
-        if not url:
-            QMessageBox.information(
-                self, "Interface Web",
-                "O Sentinel ainda não confirmou uma interface HTTP/HTTPS acessível para este equipamento."
-            )
-            return
-        if not QDesktopServices.openUrl(QUrl(url)):
-            QMessageBox.warning(self, "Interface Web", "Não foi possível abrir a interface Web no navegador padrão.")
+        site_id = self.current_site_id
+        self._open_web_services(self._device_web_services(device_id),
+                                lambda: self.current_site_id == site_id and self.selected_device_id() == device_id)
 
     def show_device_context_menu(self, pos):
         index = self.dev_table.indexAt(pos)
@@ -7926,9 +7997,12 @@ class MainWindow(QMainWindow):
         channels = QAction("Canais / testar stream", self)
         channels.triggered.connect(self.read_device_channels_or_stream)
         menu.addAction(channels)
-        device = self.db.get_device(device_id)
         open_web = QAction("Abrir interface Web", self)
-        open_web.setEnabled(bool(device and (device["web_url"] or "").strip()))
+        web_services = self._device_web_services(device_id)
+        open_web.setEnabled(bool(web_services))
+        if web_services and web_services[0]["last_outcome"] != "confirmed":
+            open_web.setToolTip("Confirmação histórica: a última tentativa falhou.")
+            menu.setToolTipsVisible(True)
         open_web.triggered.connect(self.open_selected_device_web)
         menu.addAction(open_web)
         view_channels = QAction("Ver canais salvos", self)
@@ -8220,10 +8294,28 @@ class MainWindow(QMainWindow):
         self.discovery_seconds += 1
         self.devices_found_status.setText(f"Analisando… {self.discovery_seconds}s")
 
+    def _discovery_web_candidates(self):
+        # Snapshot hints on the UI thread; the discovery worker never reads SQLite.
+        candidates = {}
+        for device in self.db.list_devices(self.current_site_id, include_archived=True):
+            for endpoint in self.db.list_device_endpoints(device["id"]):
+                try:
+                    targets = candidates.setdefault(endpoint["ip"], [])
+                    for hint in (endpoint["web_url"], device["web_url"]):
+                        for target in web_service_candidates(endpoint["ip"], hint):
+                            if target not in targets:
+                                targets.append(target)
+                except ValueError:
+                    continue
+        return candidates
+
     def start_discovery(self):
         if not self.current_site_id or not self.devices_find_btn.isEnabled():
             return
         self.devices_find_btn.setEnabled(False)
+        self.discovery_web_results = {}
+        self._transient_web_checks = {}
+        self._sync_selected_device_actions()
         self.devices_find_btn.setText("Analisando rede…")
         self.devices_found_table.setRowCount(0)
         self.discovery_results = []
@@ -8238,7 +8330,8 @@ class MainWindow(QMainWindow):
         self.devices_found_status.setText("Analisando… 0s")
         self.discovery_clock.start(1000)
 
-        worker = Worker(discover_network_devices, self.current_site_id, with_progress=True)
+        worker = Worker(discover_network_devices, self.current_site_id, with_progress=True,
+                        web_candidates=self._discovery_web_candidates())
         worker.signals.progress.connect(self.devices_discovery_log.appendPlainText)
         worker.signals.result.connect(self.discovery_done)
         worker.signals.error.connect(self.discovery_error)
@@ -8267,8 +8360,14 @@ class MainWindow(QMainWindow):
         self.devices_found_delete_btn.setEnabled(included)
         self.devices_report_found_btn.setEnabled(selected)
         self.devices_web_found_btn.setEnabled(bool(
-            selected and discovered_web_url(self.discovery_results[row].web_url, self.discovery_results[row].ip)
+            selected and self._found_web_services(self.discovery_results[row])
         ))
+
+    def _found_web_services(self, device):
+        if getattr(self, "discovery_web_site_id", None) != self.current_site_id:
+            return []
+        checks = getattr(self, "discovery_web_results", {}).get(device.ip, [])
+        return ordered_web_services(web_services_from_checks(checks, endpoint_ip=device.ip))
 
     def act_on_found_device(self, action):
         row = self.devices_found_table.currentRow()
@@ -8308,19 +8407,21 @@ class MainWindow(QMainWindow):
         if row < 0 or row >= len(self.discovery_results):
             return
         device = self.discovery_results[row]
-        url = discovered_web_url(device.web_url, device.ip)
-        if not url:
-            QMessageBox.information(self, "Interface Web", "Não foi detectada uma página Web deste equipamento.")
-            return
-        if not QDesktopServices.openUrl(QUrl(url)):
-            QMessageBox.warning(self, "Interface Web", "Não foi possível abrir a interface Web no navegador padrão.")
+        site_id = self.current_site_id
+        self._open_web_services(self._found_web_services(device),
+                                lambda: self.current_site_id == site_id
+                                and self.devices_found_table.currentRow() == row
+                                and row < len(self.discovery_results) and self.discovery_results[row] is device)
 
     def discovery_done(self, report):
-        if self.discovery_site_id != self.current_site_id:
+        if (self.discovery_site_id != self.current_site_id
+                or getattr(report, "site_id", self.discovery_site_id) not in (None, self.current_site_id)):
             self.devices_found_status.setText("Site alterado; faça uma nova busca neste Site.")
             self.discovery_results = []
             self.devices_found_table.setRowCount(0)
             return
+        self.discovery_web_site_id = self.current_site_id
+        self.discovery_web_results = getattr(report, "web_results", {})
         if report.interfaces:
             self.devices_discovery_log.appendPlainText("Interfaces: " + " | ".join(report.interfaces))
         self.devices_discovery_log.appendPlainText(
@@ -8332,6 +8433,16 @@ class MainWindow(QMainWindow):
             self.devices_discovery_log.appendPlainText(f"Rede • {host} • sem evidência CFTV")
         if len(report.other_hosts) > 20:
             self.devices_discovery_log.appendPlainText(f"Rede • mais {len(report.other_hosts) - 20} host(s) omitidos")
+
+        discovered_ips = {device.ip for device in report.devices}
+        for ip, checks in self.discovery_web_results.items():
+            if ip in discovered_ips:
+                continue
+            endpoint_device = Device(site_id=self.current_site_id, ip=ip)
+            known = self.db.find_known_for_discovery(self.current_site_id, endpoint_device)
+            if known:
+                self._remember_discovered_web_checks(known["id"], endpoint_device, checks)
+        self._sync_selected_device_actions()
 
         # Retain registered devices alongside new discoveries for channel management.
         new_devices = []
@@ -8345,9 +8456,13 @@ class MainWindow(QMainWindow):
                     # of silently suppressing it with active known devices.
                     new_devices.append(device)
                     archived_count += 1
+                    self._remember_discovered_web_checks(known["id"], device,
+                                                        self.discovery_web_results.get(device.ip, []))
                     continue
                 before_ips = {str(ep["ip"]) for ep in self.db.list_device_endpoints(int(known["id"]))}
                 canonical_id = self.db.upsert_device(device)
+                self._remember_discovered_web_checks(canonical_id, device,
+                                                    self.discovery_web_results.get(device.ip, []))
                 after_ips = {str(ep["ip"]) for ep in self.db.list_device_endpoints(int(canonical_id))}
                 if after_ips - before_ips:
                     endpoint_updates += 1
@@ -8420,6 +8535,7 @@ class MainWindow(QMainWindow):
                 item.setToolTip(ev)
                 self.devices_found_table.setItem(row, col, item)
         self.refresh_discovery_registration()
+        self._sync_selected_device_actions()
 
     def add_found_from_devices(self):
         row = self.devices_found_table.currentRow()
@@ -8455,6 +8571,8 @@ class MainWindow(QMainWindow):
         )
 
     def add_discovered_selected(self):
+        if getattr(self, "discovery_web_site_id", self.current_site_id) != self.current_site_id:
+            return
         row = self.devices_found_table.currentRow()
         if row < 0 or row >= len(self.discovery_results):
             return
@@ -8474,6 +8592,9 @@ class MainWindow(QMainWindow):
             self.db.archive_device(known["id"], False)
             self.db.set_ignore_discovery(known["id"], False)
         device_id = self.db.upsert_device(device)
+        self._remember_discovered_web_checks(device_id, device,
+                                            getattr(self, "discovery_web_results", {}).get(device.ip, []),
+                                            confirmed_only=True)
         self.db.add_event(self.current_site_id, device_id, "info", "device_added", f"{device.name} ({device.ip}) adicionado ao Site.")
         self.devices_discovery_log.appendPlainText(f"Adicionado ao Site: {device.ip} — {device.name}")
         self.refresh_all()

@@ -1,4 +1,4 @@
-"""Isolated HTTP/HTTPS service probes; no persistence or application integration."""
+"""HTTP/HTTPS probes and credential-free candidate and selection helpers."""
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -7,8 +7,65 @@ from ipaddress import ip_address
 import math
 import ssl
 import time
+from urllib.parse import urlsplit
 
 from . import __version__
+
+
+def web_service_candidates(ip: str, web_url: str = "") -> list[tuple[str, int]]:
+    """Return explicit probe targets; a configured URL never confirms a service."""
+    address = _validated_ip(ip)
+    candidates = [("http", 80), ("https", 443), ("http", 8080), ("https", 8443)]
+    try:
+        hint = urlsplit(web_url.strip())
+        if (hint.scheme in ("http", "https") and hint.hostname
+                and hint.username is None and hint.password is None
+                and _validated_ip(hint.hostname) == address):
+            port = hint.port if hint.port is not None else (443 if hint.scheme == "https" else 80)
+            build_web_service_url(address, hint.scheme, port)
+            if (hint.scheme, port) not in candidates:
+                candidates.append((hint.scheme, port))
+    except (ValueError, AttributeError):
+        pass
+    return candidates
+
+
+def is_transient_web_endpoint(ip: str, metadata: dict) -> bool:
+    address = ip_address(_validated_ip(ip))
+    mapped = getattr(address, "ipv4_mapped", None)
+    return bool(address.is_loopback or address.is_unspecified or (mapped and mapped.is_loopback)
+                or metadata.get("connection_mode") == "site_connector"
+                or metadata.get("transient"))
+
+
+def web_services_from_checks(checks, *, is_primary=False, endpoint_ip=None):
+    return [dict(endpoint_ip=check.ip, scheme=check.scheme, port=check.port,
+                 last_outcome="confirmed", last_confirmed_at=check.checked_at,
+                 last_tls_status=check.tls_status, is_primary=is_primary)
+            for check in checks if check.confirmed
+            and (endpoint_ip is None or _validated_ip(check.ip) == _validated_ip(endpoint_ip))]
+
+
+def ordered_web_services(services):
+    """Keep current confirmations ahead of historical failures and deduplicate."""
+    valid = []
+    for raw in services:
+        service = dict(raw)
+        if not service.get("last_confirmed_at"):
+            continue
+        try:
+            build_web_service_url(service["endpoint_ip"], service["scheme"], service["port"])
+            confirmed_at = datetime.fromisoformat(service["last_confirmed_at"]).timestamp()
+        except (KeyError, ValueError, TypeError):
+            continue
+        key = (service.get("last_outcome") != "confirmed", service["scheme"] != "https",
+               not bool(service.get("is_primary")), -confirmed_at)
+        valid.append((key, service))
+    valid.sort(key=lambda pair: pair[0])
+    selected = {}
+    for _key, service in valid:
+        selected.setdefault((service["endpoint_ip"], service["scheme"], service["port"]), service)
+    return list(selected.values())
 
 
 @dataclass(frozen=True, slots=True)

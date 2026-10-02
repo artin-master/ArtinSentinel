@@ -1,4 +1,6 @@
 from __future__ import annotations
+import json
+from ipaddress import ip_address
 from dataclasses import dataclass, field
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -8,6 +10,7 @@ from .providers import classify_from_scopes, pick_provider
 from .probes import ping_probe, tcp_probe, http_probe, rtsp_options
 from .lan_discovery import scan_local_cctv, HostObservation
 from .fingerprint import apply_device_fingerprint
+from .web_services import WebProbeResult, web_service_candidates, probe_web_service, is_transient_web_endpoint
 
 COMMON_PORTS = (80, 443, 554, 8000, 8080, 8899, 34567, 37777)
 
@@ -32,6 +35,52 @@ class DiscoveryReport:
     responsive_hosts: int = 0
     other_hosts: list[str] = field(default_factory=list)
     devices: list[Device] = field(default_factory=list)
+    site_id: int | None = None
+    web_results: dict[str, list[WebProbeResult]] = field(default_factory=dict)
+
+
+def probe_discovered_web_services(device: Device, extra_candidates=()) -> list[WebProbeResult]:
+    try:
+        candidates = web_service_candidates(device.ip, device.web_url)
+    except ValueError:
+        return []
+    for candidate in extra_candidates:
+        if candidate not in candidates:
+            candidates.append(candidate)
+    return [probe_web_service(device.ip, scheme, port) for scheme, port in candidates]
+
+
+def persist_discovered_web_checks(db, device_id: int, device: Device, checks, *, confirmed_only=False):
+    """Persist only evidence belonging to this existing equipment and endpoint."""
+    if not checks:
+        return
+    try:
+        address = ip_address(device.ip.strip())
+        checks = [check for check in checks if ip_address(check.ip) == address
+                  and (not confirmed_only or check.confirmed)]
+    except ValueError:
+        return
+    if not checks:
+        return
+    owner = db.get_device(device_id)
+    if owner is None or owner["site_id"] != device.site_id:
+        return
+    metadata = json.loads(owner["metadata_json"] or "{}")
+    if (is_transient_web_endpoint(device.ip, metadata)
+            or is_transient_web_endpoint(device.ip, device.metadata)):
+        return
+    endpoint = db.get_device_endpoint(device_id, device.ip)
+    if endpoint is None:
+        db.register_device_endpoint(device_id, ip=device.ip, metadata=device.metadata,
+                                    web_url=device.web_url, rtsp_url=device.rtsp_url,
+                                    onvif_url=device.onvif_url)
+        endpoint = db.get_device_endpoint(device_id, device.ip)
+    for check in checks:
+        db.record_web_service_check(
+            endpoint["id"], ip=check.ip, scheme=check.scheme, port=check.port,
+            confirmed=check.confirmed, http_status=check.http_status,
+            tls_status=check.tls_status, error_code=check.error_code, latency_ms=check.latency_ms,
+        )
 
 
 def discover_onvif_devices(site_id: int) -> list[Device]:
@@ -115,8 +164,8 @@ def _merge_device(existing: Device, incoming: Device) -> Device:
     return pick_provider(existing)
 
 
-def discover_network_devices(site_id: int, progress=None) -> DiscoveryReport:
-    report = DiscoveryReport()
+def discover_network_devices(site_id: int, progress=None, *, web_candidates=None) -> DiscoveryReport:
+    report = DiscoveryReport(site_id=site_id)
     merged: dict[str, Device] = {}
 
     if progress:
@@ -153,6 +202,20 @@ def discover_network_devices(site_id: int, progress=None) -> DiscoveryReport:
 
     for device in merged.values():
         apply_device_fingerprint(device)
+
+    if progress:
+        progress("Confirmando serviços HTTP/HTTPS dos equipamentos identificados…")
+    web_targets = dict(merged)
+    for ip in web_candidates or {}:
+        # Registered endpoints can be outside the LAN scan (including tunnels).
+        # Probe evidence does not add them to the CFTV discovery classification.
+        web_targets.setdefault(ip, Device(site_id=site_id, ip=ip))
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        tasks = {pool.submit(probe_discovered_web_services, device,
+                             (web_candidates or {}).get(device.ip, ())): device.ip
+                 for device in web_targets.values()}
+        for future in as_completed(tasks):
+            report.web_results[tasks[future]] = future.result()
 
     report.other_hosts = [host for host in report.other_hosts if host.split(" • ", 1)[0] not in merged]
     report.devices = sorted(merged.values(), key=lambda d: tuple(int(x) if x.isdigit() else x for x in d.ip.split(".")))
