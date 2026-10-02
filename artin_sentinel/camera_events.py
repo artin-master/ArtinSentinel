@@ -20,6 +20,7 @@ class CameraEvent:
     received_at: str = ''
     source: str = 'dvrip-sofia'
     reason: str = 'notification'
+    native_channel: int | None = None
 
 
 def normalize_event(payload):
@@ -39,7 +40,7 @@ def normalize_event(payload):
     family = families.get(name)
     state = {'Start': 'start', 'Stop': 'stop'}.get(action) if isinstance(action, str) else None
     kind = f'{family}_{state}' if family and state else 'alarm_unknown'
-    return CameraEvent(kind, channel, timestamp())
+    return CameraEvent(kind, channel, timestamp(), native_channel=channel)
 
 
 def correlated_channels(rows):
@@ -72,12 +73,44 @@ def correlated_channels(rows):
     return {index: channel for index, channel in mapping.items() if index not in ambiguous}
 
 
+def verified_event_channels(device, rows):
+    """Require recorded physical event/stream correlation for this firmware/IP.
+
+    Route indices alone are candidates, not proof for multi-lens alarm engines.
+    No automatic mapping or capability promotion is performed.
+    """
+    import json
+    try:
+        metadata = json.loads(device['metadata_json'] or '{}')
+    except (ValueError, TypeError, KeyError, IndexError):
+        return {}
+    evidence = metadata.get('dvrip_event_channel_correlation') if isinstance(metadata, dict) else None
+    if not isinstance(evidence, dict) or evidence.get('source') != 'physical_test':
+        return {}
+    if evidence.get('endpoint') != device['ip'] or not device['firmware'] or evidence.get('firmware') != device['firmware']:
+        return {}
+    candidates = correlated_channels(rows)
+    pairs = evidence.get('channels')
+    if not isinstance(pairs, list):
+        return {}
+    mapping = {}
+    for pair in pairs[:256]:
+        if not isinstance(pair, dict):
+            continue
+        native, channel_id = pair.get('native_channel'), pair.get('channel_id')
+        if type(native) is int and type(channel_id) is int and candidates.get(native) == channel_id:
+            mapping[native] = channel_id
+    return mapping
+
+
 class CameraEventState:
-    def __init__(self, persist, *, clock=time.monotonic, ttl=30, unknown_window=5):
+    def __init__(self, persist, *, clock=time.monotonic, ttl=30, unknown_window=5, replay_window=2):
         self.persist = persist
         self.clock = clock
         self.ttl = ttl
         self.unknown_window = unknown_window
+        self.replay_window = replay_window
+        self.started = {}
         self.active = {}
         self.unknown_seen = {}
         self.last = {}
@@ -85,23 +118,26 @@ class CameraEventState:
     def ingest(self, device_id, event, channel_map=None):
         if not isinstance(event, CameraEvent) or event.kind not in EVENT_TYPES:
             return False
-        event = replace(event, channel=(channel_map or {}).get(event.channel))
+        event = replace(event, channel=(channel_map or {}).get(event.channel), native_channel=event.channel)
         now = self.clock()
         self.last[device_id] = event
         if event.kind == 'alarm_unknown':
-            key = (device_id, event.channel)
+            key = (device_id, event.channel, event.native_channel)
             if now - self.unknown_seen.get(key, float('-inf')) < self.unknown_window:
                 return False
             self.persist(device_id, event)
             self.unknown_seen[key] = now
             return True
         family, action = event.kind.split('_')
-        key = (device_id, event.channel, family)
+        key = (device_id, event.channel, family, event.native_channel if event.channel is None else None)
         if action == 'start':
             if key in self.active:
                 self.active[key] = (event, now + self.ttl)
                 return False
+            if now - self.started.get(key, float("-inf")) < self.replay_window:
+                return False
             self.persist(device_id, event)
+            self.started[key] = now
             self.active[key] = (event, now + self.ttl)
         elif key in self.active:
             self.persist(device_id, event)
@@ -114,10 +150,11 @@ class CameraEventState:
         now = self.clock()
         for key, (event, deadline) in list(self.active.items()):
             if now >= deadline:
-                device, channel, family = key
+                device, channel, family, native = key
                 expired = replace(event, kind=f'{family}_stop', received_at=timestamp(), reason='safety_timeout')
                 self.persist(device, expired)
                 del self.active[key]
+        self.started = {key: when for key, when in self.started.items() if now - when < self.replay_window}
         self.unknown_seen = {key: when for key, when in self.unknown_seen.items() if now - when < self.unknown_window}
 
     def clear_device(self, device):
@@ -128,7 +165,7 @@ class CameraEventState:
 
     def labels(self, device, channel):
         labels = []
-        for did, cid, family in self.active:
+        for did, cid, family, native in self.active:
             if did == device and cid == channel:
                 labels.append('Pessoa' if family == 'human' else 'Movimento')
         return ' · '.join(sorted(set(labels)))

@@ -1223,12 +1223,16 @@ class Database:
         if device is None:
             raise ValueError("unknown device")
         if event.channel is not None:
+            if type(event.channel) is not int:
+                raise ValueError("invalid channel")
             channel = self.get_recorder_channel(event.channel)
             if channel is None or int(channel["device_id"]) != int(device_id):
                 raise ValueError("channel does not belong to device")
+        if event.native_channel is not None and (type(event.native_channel) is not int or not 0 <= event.native_channel <= 255):
+            raise ValueError("invalid native channel")
         # timestamp is generated locally, never copied from firmware payload.
         message = json.dumps({
-            "source": event.source, "channel_id": event.channel,
+            "source": event.source, "channel_id": event.channel, "native_channel": event.native_channel,
             "reason": event.reason,
         }, ensure_ascii=False, sort_keys=True)
         with self.conn:

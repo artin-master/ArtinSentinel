@@ -2323,6 +2323,12 @@ class MainWindow(QMainWindow, CameraEventUi):
         self.rename_channel_action.triggered.connect(self.rename_selected_channel)
         self.ask_stream_action = self.inspector_menu.addAction("Perguntar qual stream ao abrir")
         self.ask_stream_action.setCheckable(True)
+        self.camera_event_action = self.inspector_menu.addAction("Sonda de eventos IT-Blue (somente leitura)")
+        self.camera_event_action.setCheckable(True)
+        self.camera_event_action.setEnabled(False)
+        self.camera_event_action.triggered.connect(self.toggle_camera_event_probe)
+        self.camera_event_diagnostics_action = self.inspector_menu.addAction("Diagnóstico de eventos locais")
+        self.camera_event_diagnostics_action.triggered.connect(self.show_camera_event_diagnostics)
         self.inspector_menu_btn.setMenu(self.inspector_menu)
         selection_card_layout.addWidget(self.inspector_menu_btn, 0, Qt.AlignTop)
         ins.addWidget(self.selection_card)
@@ -2679,6 +2685,7 @@ class MainWindow(QMainWindow, CameraEventUi):
         for candidate in self.video_tiles:
             candidate.set_selected(candidate is tile)
         self.selected_video_tile = tile
+        self.refresh_camera_event_badges()
         self._refresh_live_selection_from_tile(tile)
         self.refresh_selected_audio_controls()
         self.refresh_selected_ptz_controls()
@@ -4574,6 +4581,8 @@ class MainWindow(QMainWindow, CameraEventUi):
         self.live_diag_panel.appendPlainText(f"Janela {tile.index + 1} — {title}")
         self.live_diag_panel.appendPlainText(f"Stream ativo: {active}")
         self.live_diag_panel.appendPlainText("Credenciais e URLs autenticadas são ocultadas por segurança.")
+        if source.get("device_id"):
+            self.append_camera_event_diagnostic(source["device_id"])
         media = local_media_status()
         audio = self.live_audio_session if self.live_audio_tile_index == tile.index else None
         if audio is not None:

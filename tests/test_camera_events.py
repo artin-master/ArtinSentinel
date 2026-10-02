@@ -80,3 +80,47 @@ def test_database_scopes_history_and_preserves_restart(tmp_path):
     db = Database(path)
     assert len(db.list_events()) == 1
     db.close()
+
+
+def test_completed_incident_replay_deduplicated_but_later_start_accepted():
+    recorded = []
+    clock = [0]
+    state = CameraEventState(lambda d,e:recorded.append(e),clock=lambda:clock[0])
+    state.ingest(1,CameraEvent('motion_start'))
+    state.ingest(1,CameraEvent('motion_stop'))
+    assert not state.ingest(1,CameraEvent('motion_start'))
+    assert len(recorded) == 2
+    clock[0] = 3
+    assert state.ingest(1,CameraEvent('motion_start'))
+
+
+def test_channel_assignment_requires_firmware_and_endpoint_physical_evidence():
+    from artin_sentinel.camera_events import verified_event_channels
+    device = {'ip':'192.0.2.1','firmware':'V5','metadata_json':'{}'}
+    rows = [{'id':10,'rtsp_url':'dvrip://192.0.2.1?channel=0'}]
+    assert verified_event_channels(device,rows) == {}
+    evidence = {'source':'physical_test','endpoint':'192.0.2.1','firmware':'V5','channels':[{'native_channel':0,'channel_id':10}]}
+    device['metadata_json'] = json.dumps({'dvrip_event_channel_correlation':evidence})
+    assert verified_event_channels(device,rows) == {0:10}
+    device['firmware'] = 'V6'
+    assert verified_event_channels(device,rows) == {}
+
+
+def test_device_scoped_history_keeps_only_typed_native_index():
+    recorded = []
+    state = CameraEventState(lambda d,e:recorded.append(e))
+    state.ingest(1,normalize_event({'Event':'VideoMotion','Status':'Start','Channel':2,'SessionID':'secret'}))
+    assert recorded[0].channel is None and recorded[0].native_channel == 2
+    assert 'secret' not in repr(recorded)
+
+
+def test_uncorrelated_native_channels_keep_equipment_indicator_until_both_stop():
+    recorded = []
+    state = CameraEventState(lambda d,e:recorded.append(e))
+    state.ingest(1,CameraEvent('motion_start',0))
+    state.ingest(1,CameraEvent('motion_start',1))
+    state.ingest(1,CameraEvent('motion_stop',0))
+    assert state.labels(1,None) == 'Movimento'
+    state.ingest(1,CameraEvent('motion_stop',1))
+    assert state.labels(1,None) == ''
+    assert len(recorded) == 4

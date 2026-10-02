@@ -35,6 +35,15 @@ class EventSession(DvripSession):
         self._buffer = bytearray()
         self.pending = deque(maxlen=64)
 
+    def close(self):
+        sock = self.sock
+        if sock is not None:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+        super().close()
+
     def receive(self, deadline=None):
         deadline = deadline or time.monotonic() + self.timeout
         while True:
@@ -68,6 +77,10 @@ class EventSession(DvripSession):
     def send_only(self, message, payload):
         if message not in {1000, GUARD_REQ, KEEP_ALIVE, CONFIG_GET}:
             raise EventProtocolError("command_not_allowed")
+        if message != 1000:
+            names = {GUARD_REQ: ("",), KEEP_ALIVE: ("KeepAlive",), CONFIG_GET: READ_CONFIGS}
+            if set(payload) != {"Name", "SessionID"} or payload.get("Name") not in names[message]:
+                raise EventProtocolError("command_not_allowed")
         sock = self.sock
         if sock is None:
             raise EventProtocolError("closed")
@@ -79,13 +92,19 @@ class EventSession(DvripSession):
         self.send_only(msgid, payload)
         deadline = time.monotonic() + self.timeout
         while time.monotonic() < deadline:
-            message, sid, reply = self.receive(deadline)
+            try:
+                message, sid, reply = self.receive(deadline)
+            except socket.timeout:
+                continue
             if message == ALARM_INFO and self.session and sid == self.session:
                 self.pending.append(reply)
                 continue
             if message != msgid + 1 or (self.session and sid != self.session):
                 raise EventProtocolError("unexpected_reply")
             self.session = sid or self.session
+            if msgid == 1000 and reply.get("Ret") != 100:
+                code = "authentication_refused" if reply.get("Ret") in {106, 107, 203} else "login_refused"
+                raise EventProtocolError(code)
             return reply
         raise EventProtocolError("response_timeout")
 
@@ -103,7 +122,7 @@ class EventSession(DvripSession):
         for name in READ_CONFIGS:
             reply = self._send_json(CONFIG_GET, {"Name": name, "SessionID": f"0x{self.session:08x}"})
             if reply.get("Ret") == 100:
-                summaries.extend(detection_summary(reply.get(name)))
+                summaries.extend(detection_summary(reply.get(name), path=name))
         return tuple(summaries)
 
 
@@ -237,9 +256,11 @@ class EventWorker:
                         raise EventProtocolError("unexpected_event_packet")
             except Exception as exc:
                 # No arbitrary exception messages, credentials or remote payloads.
-                allowed = {"invalid_packet", "invalid_json", "invalid_payload", "unexpected_reply", "subscription_refused", "session_mismatch", "keepalive_timeout", "unexpected_event_packet", "connection_closed", "response_timeout"}
+                allowed = {"invalid_packet", "invalid_json", "invalid_payload", "unexpected_reply", "subscription_refused", "session_mismatch", "keepalive_timeout", "unexpected_event_packet", "connection_closed", "response_timeout", "authentication_refused", "login_refused"}
                 code = str(exc) if isinstance(exc, EventProtocolError) and str(exc) in allowed else "communication_error"
                 self._update(active=False, state="reconnecting", error_code=code)
+                if code in {"subscription_refused", "authentication_refused", "login_refused"}:
+                    break
             finally:
                 session.close()
                 with self._lock:
@@ -252,4 +273,4 @@ class EventWorker:
             if self._stop.wait(delay):
                 break
             delay = min(delay * 2, 60)
-        self._update(active=False, state="stopped" if self._stop.is_set() else "unsupported")
+        self._update(active=False, state="stopped" if self._stop.is_set() else ("unsupported" if self.snapshot().support == "no" else "refused"))

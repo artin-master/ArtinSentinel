@@ -15,8 +15,9 @@ def window(monkeypatch):
     w = MainWindow.__new__(MainWindow)
     QMainWindow.__init__(w)
     w.db = Mock()
-    w.db.get_device.return_value = {'site_id':1,'ip':'192.0.2.1'}
+    w.db.get_device.return_value = {'site_id':1,'ip':'192.0.2.1','provider':'it-blue','model':'IT-Blue','firmware':'V5','metadata_json':'{"dvrip_event_channel_correlation":{"source":"physical_test","endpoint":"192.0.2.1","firmware":"V5","channels":[{"native_channel":0,"channel_id":10}]}}'}
     w.db.list_recorder_channels.return_value = [{'id':10,'rtsp_url':'dvrip://192.0.2.1?channel=0'}]
+    w._credentials_for_device = Mock(return_value=('admin','secret'))
     w.current_site_id = 1
     w.video_tiles = [VideoTile(0),VideoTile(1)]
     for i,tile in enumerate(w.video_tiles):
@@ -25,7 +26,7 @@ def window(monkeypatch):
     w.selected_video_tile = w.video_tiles[0]
     w.camera_event_status = QLabel()
     w._ensure_camera_events()
-    worker = SimpleNamespace(events=Queue(),stop=Mock(),wait=Mock(return_value=True),snapshot=lambda:SimpleNamespace(state='active'))
+    worker = SimpleNamespace(events=Queue(),stop=Mock(),wait=Mock(return_value=True),snapshot=lambda:__import__('artin_sentinel.dvrip_events',fromlist=['EventDiagnostics']).EventDiagnostics(support='yes',active=True,state='active'))
     w._camera_event_workers[1] = worker
     w._camera_event_bindings[1] = (1,'192.0.2.1',{0:10})
     yield w,worker
@@ -83,3 +84,71 @@ def test_selection_change_does_not_retarget_event(window):
     w.poll_camera_events()
     assert w.video_tiles[0].camera_event_badge.text() == 'Pessoa'
     assert w.video_tiles[1].camera_event_badge.text() == ''
+
+
+def test_diagnostic_is_sanitized_and_channel_scoped(window):
+    w,worker = window
+    w.db.get_device.return_value['model'] = 'model secret password=hidden'
+    worker.events.put(CameraEvent('motion_start',0))
+    w.poll_camera_events()
+    text = w.camera_event_diagnostic_text(1)
+    assert 'secret' not in text and 'hidden' not in text
+    assert 'motion_start' in text and 'Canal cadastrado: 10' in text
+    assert 'assinatura aceita' in text
+    assert 'estado físico' in text
+
+
+def test_probe_start_stop_and_missing_credentials_no_modal(window,monkeypatch):
+    w,old = window
+    w._stop_camera_event_device(1)
+    fake = Mock()
+    fake.snapshot.return_value = __import__('artin_sentinel.dvrip_events',fromlist=['EventDiagnostics']).EventDiagnostics()
+    monkeypatch.setattr('artin_sentinel.dvrip_events.EventWorker', lambda *a, **k: fake)
+    w.toggle_camera_event_probe(True)
+    fake.start.assert_called_once()
+    assert w._camera_event_bindings[1][0:2] == (1,'192.0.2.1')
+    w.toggle_camera_event_probe(False)
+    fake.stop.assert_called_once()
+    w._credentials_for_device.return_value = None
+    w.toggle_camera_event_probe(True)
+    assert 'credencial' in w.camera_event_status.text()
+    assert not w._camera_event_workers
+
+
+def test_shutdown_stops_owned_worker_and_repeated_stop_is_safe(window):
+    w,worker = window
+    worker.events.put(CameraEvent('motion_start',0))
+    w.stop_camera_events()
+    w.stop_camera_events()
+    worker.stop.assert_called_once()
+    assert not w._camera_event_workers
+    w.db.add_camera_event.assert_not_called()
+
+
+def test_local_evidence_never_promotes_homologation_and_no_profile_write(window):
+    w,worker = window
+    w.db.get_device.return_value['metadata_json'] = '{}'
+    worker.events.put(CameraEvent('human_start',0))
+    w.poll_camera_events()
+    patches = [call.args[1] for call in w.db.merge_device_metadata.call_args_list]
+    evidence = patches[-1]['dvrip_event_evidence']
+    assert evidence['homologated'] is False
+    assert evidence['physical_validation'] == 'pending'
+    assert evidence['confidence'] == 'protocol_response_only'
+    assert evidence['normalized_types_observed'] == ['human_start']
+    assert 'secret' not in repr(patches)
+    assert all(list(patch) == ['dvrip_event_evidence'] for patch in patches)
+
+
+def test_visible_diagnostic_updates_without_discarding_stream_notes(window):
+    from PySide6.QtWidgets import QPlainTextEdit
+    w,worker = window
+    w.live_diag_panel = QPlainTextEdit()
+    w.live_diag_panel.show()
+    w.append_camera_event_diagnostic(1)
+    w.live_diag_panel.appendPlainText('Live View: stream intacto')
+    worker.events.put(CameraEvent('motion_start',0))
+    w.poll_camera_events()
+    assert 'Último evento: motion_start' in w.live_diag_panel.toPlainText()
+    assert 'Live View: stream intacto' in w.live_diag_panel.toPlainText()
+    w.live_diag_panel.deleteLater()
