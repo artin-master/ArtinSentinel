@@ -20,6 +20,26 @@ from .media_process import terminate_media_process
 FRAME_WIDTH = 640
 FRAME_HEIGHT = 360
 FRAME_SIZE = FRAME_WIDTH * FRAME_HEIGHT * 3
+FRAME_INACTIVITY_TIMEOUT = 15.0
+
+
+def classify_live_ffmpeg_error(text: str) -> tuple[str, str]:
+    """Classify a sanitized FFmpeg stderr line without retaining media data."""
+    lowered = str(text or "").casefold()
+    if any(token in lowered for token in ("401 unauthorized", "403 forbidden", "authentication failed")):
+        return "authentication", "fonte/credencial"
+    if any(token in lowered for token in (
+        "connection timed out", "i/o timeout", "timed out", "connection refused",
+        "connection reset", "broken pipe", "no route to host", "network is unreachable",
+        "rtsp server returned 5", "server returned 5",
+    )):
+        return "network", "rede/RTSP"
+    if any(token in lowered for token in (
+        "error while decoding", "invalid data found", "corrupt decoded frame",
+        "concealing", "missing reference picture", "no decoder found",
+    )):
+        return "decoder", "decoder/fluxo"
+    return "ffmpeg", "FFmpeg"
 
 
 @lru_cache(maxsize=1)
@@ -1090,6 +1110,15 @@ class LiveStreamSession:
         self._fatal_decoder_error = threading.Event()
         self._network_failure = threading.Event()
         self._network_failure_detail = ""
+        self.opened_at: float | None = None
+        self.first_frame_at: float | None = None
+        self.last_frame_at: float | None = None
+        self.frame_count = 0
+        self.last_error_class = ""
+        self.last_error_origin = ""
+        self.last_reconnect_cause = ""
+        self._recent_error_classes: list[str] = []
+        self.active_transport = "tcp"
 
     @property
     def decoder_available(self) -> bool:
@@ -1187,6 +1216,7 @@ class LiveStreamSession:
         if self._stop.is_set() or (self._thread and self._thread.is_alive()):
             return
         self._finished.clear()
+        self.opened_at = time.monotonic()
         self.current_state = "connecting"
         self._thread = threading.Thread(target=self._run_wrapper, name="sentinel-live", daemon=True)
         self._thread.start()
@@ -1231,6 +1261,23 @@ class LiveStreamSession:
             except queue.Empty:
                 break
         return latest
+
+    def diagnostics_snapshot(self) -> dict[str, object]:
+        """Return per-session timing/failure metadata without URLs or frame data."""
+        now = time.monotonic()
+        return {
+            "profile": self.active_profile,
+            "fps_target": self.fps,
+            "opened_seconds": round(max(0.0, now - self.opened_at), 1) if self.opened_at else 0.0,
+            "frame_count": self.frame_count,
+            "last_frame_seconds_ago": round(max(0.0, now - self.last_frame_at), 1) if self.last_frame_at else None,
+            "process_alive": bool(self._process is not None and self._process.poll() is None),
+            "transport": self.active_transport,
+            "recent_errors": tuple(self._recent_error_classes[-8:]),
+            "last_error_class": self.last_error_class,
+            "last_error_origin": self.last_error_origin,
+            "last_reconnect_cause": self.last_reconnect_cause,
+        }
 
     def latest_status(self) -> str | None:
         latest = None
@@ -1282,6 +1329,14 @@ class LiveStreamSession:
         if self._stop.is_set():
             return
         self.current_state = "playing"
+        now = time.monotonic()
+        if self.first_frame_at is None:
+            self.first_frame_at = now
+        self.last_frame_at = now
+        self.frame_count += 1
+        if self.frame_count == 1:
+            self.last_error_class = ""
+            self.last_error_origin = ""
         while True:
             try:
                 self.frames.put_nowait(frame)
@@ -1358,6 +1413,12 @@ class LiveStreamSession:
                 line = raw.decode("utf-8", "replace").strip()
                 if line:
                     lowered = line.lower()
+                    error_class, error_origin = classify_live_ffmpeg_error(line)
+                    if error_class != "ffmpeg":
+                        self.last_error_class = error_class
+                        self.last_error_origin = error_origin
+                        self._recent_error_classes.append(error_class)
+                        del self._recent_error_classes[:-8]
                     if "401 unauthorized" in lowered or "server returned 401" in lowered or "403 forbidden" in lowered:
                         self._authentication_failure.set()
                         self.current_state = "authentication"
@@ -1389,6 +1450,7 @@ class LiveStreamSession:
         self.current_state = "connecting"
         self._network_failure.clear()
         self._network_failure_detail = ""
+        self.active_transport = str(transport or "tcp")
         self.attempts += 1
         self.active_profile = profile
         transport_label = transport.upper()
@@ -1419,8 +1481,24 @@ class LiveStreamSession:
                 )
                 stderr_thread.start()
             while not self._stop.is_set():
-                raw = self._read_exact(proc.stdout, FRAME_SIZE, self._stop)
+                raw = self._read_exact(
+                    proc.stdout, FRAME_SIZE, self._stop,
+                    inactivity_timeout=FRAME_INACTIVITY_TIMEOUT,
+                )
                 if len(raw) != FRAME_SIZE:
+                    if not self._stop.is_set() and proc.poll() is None:
+                        self.last_error_class = "frame_timeout"
+                        self.last_error_origin = "decoder sem frames (processo ainda ativo)"
+                        self.last_reconnect_cause = f"{profile}: FFmpeg permaneceu ativo sem frame por {FRAME_INACTIVITY_TIMEOUT:g} s"
+                        self._recent_error_classes.append(self.last_error_class)
+                        del self._recent_error_classes[:-8]
+                        self._push_diag(f"Watchdog • {self.last_reconnect_cause}; recuperando somente este canal")
+                    elif not self._stop.is_set() and raw:
+                        self.last_error_class = "truncated_frame"
+                        self.last_error_origin = "fluxo/decoder"
+                        self.last_reconnect_cause = f"{profile}: frame incompleto recebido"
+                        self._recent_error_classes.append(self.last_error_class)
+                        del self._recent_error_classes[:-8]
                     break
                 if not got_frame:
                     got_frame = True
@@ -1494,6 +1572,7 @@ class LiveStreamSession:
                 schedule = (3.0, 8.0, 15.0, 30.0)
                 delay = schedule[min(network_failures - 1, len(schedule) - 1)]
                 reason = self._network_failure_detail or "host/rede inacessível"
+                self.last_reconnect_cause = f"rede/RTSP: {reason}"
                 self._push_status(f"Host temporariamente inacessível • nova tentativa em {int(delay)} s")
                 self._push_diag(
                     f"Conectividade: {reason}; ciclo RTSP abreviado. Nova tentativa em {int(delay)} s com o perfil principal."
@@ -1514,6 +1593,8 @@ class LiveStreamSession:
                 consecutive_failures = 0
                 self.reconnects += 1
                 delay = 2.0
+                if not self.last_reconnect_cause:
+                    self.last_reconnect_cause = "sessão RTSP terminou após entregar frames"
                 self._push_status(f"Reconectando em 2 s • {self.active_profile}")
             else:
                 consecutive_failures += 1
@@ -1534,6 +1615,8 @@ class LiveStreamSession:
                     delay = 5.0
                 else:
                     delay = 30.0
+                if not self.last_reconnect_cause:
+                    self.last_reconnect_cause = "nenhum frame recebido; próxima tentativa com backoff"
                 self._push_status(f"Sem vídeo • nova tentativa em {int(delay)} s")
             self.current_state = "retrying"
             self._stop.wait(delay)

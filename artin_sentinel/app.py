@@ -3466,10 +3466,32 @@ class MainWindow(QMainWindow):
                     self.refresh_stream_indicator_for_selected()
                     self._refresh_live_selection_from_tile(tile)
                 pix = tile.body.pixmap()
-                if "AO VIVO" not in status and (pix is None or pix.isNull()):
+                stream_failed = status.startswith(("Sem vídeo", "Host temporariamente inacessível"))
+                if stream_failed or getattr(session, "last_error_class", "") in {"frame_timeout", "truncated_frame"}:
+                    # Do not leave the last decoded image looking live while this
+                    # tile's own worker is recovering its RTSP/decoder session.
+                    tile.body.setPixmap(QPixmap())
+                    tile.body.setText(status if stream_failed else "Sem frames • recuperando este canal…")
+                elif "AO VIVO" not in status and (pix is None or pix.isNull()):
                     tile.body.setText(status)
             for line in session.drain_diagnostics():
                 self.append_live_diagnostic(tile, line)
+            snapshot_fn = getattr(session, "diagnostics_snapshot", None)
+            if callable(snapshot_fn):
+                snapshot = snapshot_fn()
+                cause = str(snapshot.get("last_reconnect_cause") or "")
+                if cause and cause != getattr(session, "_reported_reconnect_cause", ""):
+                    session._reported_reconnect_cause = cause
+                    last_frame = snapshot.get("last_frame_seconds_ago")
+                    frame_age = f"{last_frame:g}s" if isinstance(last_frame, (int, float)) else "nunca"
+                    errors = ", ".join(snapshot.get("recent_errors") or ()) or "nenhum classificado"
+                    self.append_live_diagnostic(
+                        tile,
+                        f"Live View • perfil {snapshot.get('profile') or '?'} • alvo {snapshot.get('fps_target') or '?'} FPS "
+                        f"• aberto {snapshot.get('opened_seconds') or 0:g}s • último frame {frame_age} "
+                        f"• FFmpeg {'ativo' if snapshot.get('process_alive') else 'encerrado'} "
+                        f"• erro(s): {errors} • recuperação: {cause}",
+                    )
             frame = session.latest_frame()
             if frame is not None:
                 image = QImage(
