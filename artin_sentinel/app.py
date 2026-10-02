@@ -74,6 +74,7 @@ from .paths import data_dir
 from .services import discover_network_devices, diagnose, diagnose_endpoints, persist_discovered_web_checks
 from .recorder import scan_intelbras_channels, scan_hikvision_channels, diagnose_hikvision_routes, hikvision_compatibility_report, channels_for_live_view
 from .ip_camera import scan_direct_camera_streams, DirectCameraScanResult
+from .direct_revalidation import previously_confirmed, diagnostic_line
 from .credential_store import CredentialStore
 from .app_auth import AppAuth
 from .media_process import wait_media_sessions, media_session_chain
@@ -95,7 +96,7 @@ from .talkback import (
     load_audio_input_preferences, save_audio_input_preferences,
     microphone_gain_db_for_percent, microphone_gain_percent_for_db,
     IMPLEMENTED_TALKBACK_PROTOCOLS, TALKBACK_REASONS, talkback_transport,
-    talkback_capability_status, talkback_start_readiness,
+    talkback_capability_status, talkback_start_readiness, sanitize_talkback_diagnostic,
 )
 from .intelbras_netsdk import (
     runtime_info as intelbras_netsdk_runtime_info, install_from_official_archive,
@@ -9036,7 +9037,8 @@ class MainWindow(QMainWindow, CameraEventUi):
         self.channel_scan_cancel_event = cancel_event
         self.channel_scan_progress_queue = progress_queue
         self.channels_button.setEnabled(False)
-        def report_progress(message): progress_queue.put(str(message))
+        def report_progress(message):
+            progress_queue.put(sanitize_talkback_diagnostic(message, username, secret))
         self.channel_scan_future = self.recorder_executor.submit(
             scan_direct_camera_streams,
             device["ip"], username, secret,
@@ -9044,6 +9046,7 @@ class MainWindow(QMainWindow, CameraEventUi):
             manufacturer_hint=device["manufacturer"], model_hint=device["model"], name_hint=device["name"],
             onvif_url=device["onvif_url"], rtsp_url=device["rtsp_url"],
             progress=report_progress, cancel_event=cancel_event,
+            previous_channels=[dict(row) for row in self.db.list_recorder_channels(device_id)],
         )
         wait.open()
         self.channel_scan_poll_timer.start()
@@ -9342,8 +9345,9 @@ class MainWindow(QMainWindow, CameraEventUi):
     def _prune_unavailable_live_sources(self, device_id: int) -> int:
         """Remove stale/aliased channels from active mosaics after revalidation.
 
-        Rows remain in SQLite as historical evidence, but unavailable direct
-        channels must not stay operationally visible or reconnect forever.
+        A failed rescan is not retirement evidence. Historically confirmed
+        routes stay in their tiles; the existing per-channel recovery bounds
+        retries. Only explicitly retired/unconfirmed or deleted rows are pruned.
         """
         removed = 0
         for tile in getattr(self, "video_tiles", []):
@@ -9351,7 +9355,7 @@ class MainWindow(QMainWindow, CameraEventUi):
             if source.get("type") != "channel" or int(source.get("device_id", 0) or 0) != int(device_id):
                 continue
             channel = self.db.get_recorder_channel(int(source.get("channel_id", 0) or 0))
-            if channel is not None and bool(channel["available"]):
+            if channel is not None and (bool(channel["available"]) or previously_confirmed(channel)):
                 continue
             self.stop_tile_stream(tile)
             tile.clear_source()
@@ -9367,7 +9371,7 @@ class MainWindow(QMainWindow, CameraEventUi):
                     if source.get("type") != "channel" or int(source.get("device_id", 0) or 0) != int(device_id):
                         continue
                     channel = self.db.get_recorder_channel(int(source.get("channel_id", 0) or 0))
-                    if channel is not None and bool(channel["available"]):
+                    if channel is not None and (bool(channel["available"]) or previously_confirmed(channel)):
                         continue
                     win.stop_tile(tile)
                     tile.clear_source()
@@ -9500,7 +9504,22 @@ class MainWindow(QMainWindow, CameraEventUi):
             remote_snapshot_preserved = direct_result is None and not partial and preserve_remote_inventory(
                 bool(context.get("remote_recorder")), self.db.list_recorder_channels(device_id), raw_channels
             )
-            if not remote_snapshot_preserved:
+            revalidation_states = {}
+            if direct_result is not None:
+                revalidation_states = self.db.reconcile_direct_camera_channels(
+                    device_id, persisted_rows, diagnostics=direct_result.diagnostics,
+                )
+                try:
+                    log_dir = data_dir() / "logs"
+                    log_dir.mkdir(parents=True, exist_ok=True)
+                    with (log_dir / "rtsp-diagnostics.log").open("a", encoding="utf-8") as fh:
+                        for item in direct_result.diagnostics:
+                            fh.write(f"[{datetime.now().isoformat(timespec='seconds')}] {diagnostic_line(item)}\n")
+                        for number, state in revalidation_states.items():
+                            fh.write(f"Posição {number} • decisão final={state['state']} • motivo={state['reason']}\n")
+                except OSError:
+                    pass
+            elif not remote_snapshot_preserved:
                 self.db.replace_recorder_channels(device_id, persisted_rows, partial=partial)
             if direct_result is not None:
                 changed_routes = changed_channel_routes(previous_routes, self.db.list_recorder_channels(device_id))
@@ -9549,7 +9568,8 @@ class MainWindow(QMainWindow, CameraEventUi):
         self._resume_monitor_after_recorder()
 
         if error is None:
-            rows = self.db.list_recorder_channels(device_id, available_only=bool(direct_result))
+            rows = self.db.list_recorder_channels(device_id)
+            device = self.db.get_device(device_id) or device
             self.show_channel_rows(
                 device, rows,
                 notice=("Leitura remota sem vídeo confirmado. Exibindo o último inventário conhecido; "
@@ -9582,10 +9602,18 @@ class MainWindow(QMainWindow, CameraEventUi):
         dialog.setWindowTitle(f"Canais — {device['name']}")
         dialog.resize(1120, 560)
         layout = QVBoxLayout(dialog)
+        try:
+            revalidation = json.loads(device["metadata_json"] or "{}").get("direct_channel_revalidation", {})
+        except (TypeError, ValueError):
+            revalidation = {}
+        revalidation = revalidation if isinstance(revalidation, dict) else {}
+        retained_count = sum(value.get("state") in {"pending_revalidation", "temporarily_unavailable"} for value in revalidation.values() if isinstance(value, dict))
+        fresh_count = sum(value.get("state") == "validated" for value in revalidation.values() if isinstance(value, dict))
+        media_count = (f"{fresh_count} com mídia validada nesta leitura • {retained_count} anteriormente confirmado(s), pendente(s) de revalidação" if retained_count else f"{sum(bool(row['available']) for row in rows)} com mídia validada")
         pending_count = sum("ainda não testado" in str(row["detail"] or "").casefold() for row in rows)
         info = QLabel(
             f"{device['name']} • {device['ip']} • {len(rows)} posição(ões) listadas • "
-            f"{sum(bool(row['available']) for row in rows)} com mídia validada"
+            f"{media_count}"
             + (f" • {pending_count} aguardando RTSP" if pending_count else "") + "\n"
             "Canais sem sinal/offline permanecem visíveis aqui para diagnóstico, mas somente streams validados entram no mosaico Ao vivo."
             + (f"\n{notice}" if notice else "")
@@ -9621,7 +9649,8 @@ class MainWindow(QMainWindow, CameraEventUi):
                 ch["channel_no"], source_name, display_name,
                 channel_health_label(ch, device_online=str(device["status"] or "") == "online"),
                 source_endpoint or "—", source_protocol or "—", ch["preferred_stream"], audio_text,
-                ch["main_rtsp_url"] or ch["rtsp_url"], ch["sub_rtsp_url"] or "—", ch["detail"],
+                ch["main_rtsp_url"] or ch["rtsp_url"], ch["sub_rtsp_url"] or "—",
+                ch["detail"] + (" • Pendente de revalidação; identidade anterior preservada" if revalidation.get(str(ch["channel_no"]), {}).get("state") in {"pending_revalidation", "temporarily_unavailable"} else ""),
             )
             for c, value in enumerate(vals):
                 table.setItem(r, c, QTableWidgetItem(str(value)))

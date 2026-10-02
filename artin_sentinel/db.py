@@ -1252,7 +1252,7 @@ class Database:
             )
         )
 
-    def replace_recorder_channels(self, device_id: int, channels, *, partial: bool = False):
+    def replace_recorder_channels(self, device_id: int, channels, *, partial: bool = False, _commit: bool = True):
         """Refresh inventory, preserving confirmed video on an incomplete scan."""
         now = utcnow()
         seen: set[int] = set()
@@ -1332,7 +1332,70 @@ class Database:
                 f"UPDATE recorder_channels SET available=0,updated_at=? WHERE device_id=? AND channel_no NOT IN ({placeholders})",
                 (now, device_id, *sorted(seen)),
             )
-        self.conn.commit()
+        if _commit:
+            self.conn.commit()
+
+    def reconcile_direct_camera_channels(self, device_id, channels, *, diagnostics=(), retirement_evidence=()):
+        """Absence/probe failure is not evidence that a known lens disappeared.
+
+        available means a historically confirmed route remains eligible, not
+        proof of current health. Current revalidation state is separate metadata.
+        Only explicit, reviewed alias evidence can retire a known position.
+        """
+        from .direct_revalidation import previously_confirmed, DirectChannelRetirement
+        previous = self.list_recorder_channels(device_id)
+        valid = [channel for channel in channels if channel.available]
+        fresh = {channel.channel for channel in valid}
+        known = {row["channel_no"]: row for row in previous if previously_confirmed(row)}
+        device = self.get_device(device_id)
+        if device is None:
+            raise ValueError("unknown device")
+        try:
+            metadata = json.loads(device["metadata_json"] or "{}")
+        except (TypeError, ValueError):
+            metadata = {}
+        metadata = metadata if isinstance(metadata, dict) else {}
+        old_states = metadata.get("direct_channel_revalidation", {})
+        old_states = old_states if isinstance(old_states, dict) else {}
+        retired = set()
+        for evidence in retirement_evidence:
+            if (not isinstance(evidence, DirectChannelRetirement)
+                    or evidence.evidence != "operator_confirmed_visual_alias"
+                    or evidence.channel not in known
+                    or evidence.channel in fresh
+                    or evidence.equivalent_channel not in fresh
+                    or evidence.channel == evidence.equivalent_channel):
+                raise ValueError("insufficient channel retirement evidence")
+            retired.add(evidence.channel)
+        existing_numbers = {str(row["channel_no"]) for row in previous}
+        states = {number: value for number, value in old_states.items() if number in existing_numbers and isinstance(value, dict) and value.get("state") == "retired"}
+        for number in fresh | set(known):
+            previous_state = old_states.get(str(number), {})
+            previous_state = previous_state if isinstance(previous_state, dict) else {}
+            was_retired = previous_state.get("state") == "retired"
+            if number in retired or (was_retired and number not in fresh):
+                state = "retired"
+            elif number in fresh:
+                state = "validated"
+            else:
+                attempted = any(item.get("position") == number and item.get("result") == "unconfirmed" for item in diagnostics)
+                state = "temporarily_unavailable" if attempted else "pending_revalidation"
+            states[str(number)] = {"state": state, "checked_at": utcnow(),
+                                   "reason": "operator_confirmed_visual_alias" if state == "retired" else "media_confirmed" if state == "validated" else "scan_inconclusive"}
+        # Reuse the existing partial-scan mechanism; no omission invalidates rows.
+        with self.conn:
+            self.replace_recorder_channels(device_id, valid, partial=True, _commit=False)
+            for number, old in known.items():
+                if number in fresh:
+                    continue
+                state = states[str(number)]["state"]
+                detail = ("Removido: alias visual confirmado pelo operador • " + old["detail"]) if number in retired else old["detail"]
+                self.conn.execute("UPDATE recorder_channels SET available=?,detail=?,updated_at=? WHERE id=?",
+                                  (int(state != "retired"), detail, utcnow(), old["id"]))
+            metadata["direct_channel_revalidation"] = states
+            self.conn.execute("UPDATE devices SET metadata_json=?,updated_at=? WHERE id=?",
+                              (json.dumps(metadata, ensure_ascii=False), utcnow(), device_id))
+        return states
 
     def invalidate_direct_camera_channels(self, device_id: int):
         """Mark stale direct-camera streams unavailable after a failed revalidation."""

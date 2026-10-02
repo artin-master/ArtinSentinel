@@ -8,13 +8,14 @@ import shutil
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from threading import Event
 from urllib.parse import urlparse, urlunparse, parse_qs
 from urllib.request import Request, build_opener, HTTPBasicAuthHandler, HTTPDigestAuthHandler, HTTPPasswordMgrWithDefaultRealm
 from xml.etree import ElementTree as ET
 
+from .direct_revalidation import previously_confirmed, scan_diagnostic, diagnostic_line
 from . import __version__
 from .recorder import (
     RecorderChannel, probe_rtsp_url_detailed, validate_rtsp_media,
@@ -45,6 +46,7 @@ class DirectCameraScanResult:
     identity_source: str = ""
     recorder_detected: bool = False
     recorder_channel_hint: int = 0
+    diagnostics: list[dict] = field(default_factory=list)
 
 
 def _local(tag: str) -> str:
@@ -492,7 +494,7 @@ def _x3_logical_channel(logical_key: str) -> int:
     return 0
 
 
-def _scan_itblue_x3_multilens_rtsp(ip: str, username: str, password: str, progress=None, cancel_event: Event | None = None) -> list[RecorderChannel]:
+def _scan_itblue_x3_multilens_rtsp(ip: str, username: str, password: str, progress=None, cancel_event: Event | None = None, *, previous_channels=(), diagnostics=None) -> list[RecorderChannel]:
     """Find up to three visually distinct lenses without promoting aliases.
 
     0.2.19 keeps the exhaustive fallbacks from 0.2.17, but reduces field scan
@@ -500,6 +502,65 @@ def _scan_itblue_x3_multilens_rtsp(ip: str, username: str, password: str, progre
     after the view is accepted. Alternate credential syntax for the same XM
     channel is skipped once that channel already returned usable video.
     """
+    diagnostics = diagnostics if diagnostics is not None else []
+    previous = [dict(row) for row in previous_channels if previously_confirmed(row)]
+    confirmed_urls = {row["channel_no"]: {row.get(key) for key in ("rtsp_url", "main_rtsp_url", "sub_rtsp_url") if row.get(key)} for row in previous}
+    channels = []
+    def report(number, route, profile, ok, detail, *, decision="candidate", codec="", native_index=None):
+        item = scan_diagnostic(number, route, profile, ok, detail, username, password,
+                               decision=decision, previous="previously_validated" if number in confirmed_urls else "new",
+                               codec=codec, native_index=native_index)
+        diagnostics.append(item)
+        if progress:
+            progress(diagnostic_line(item))
+    # Revalidate exact known routes first. Visual identity is already established;
+    # equal codecs/resolutions or a coarse gray signature cannot unconfirm it.
+    for row in previous:
+        number = int(row["channel_no"])
+        if number not in (1, 2, 3):
+            continue
+        routes = [("Main", row.get("main_rtsp_url") or ""), ("Sub", row.get("sub_rtsp_url") or "")]
+        if not any(route for profile, route in routes):
+            routes = [("Main", row["rtsp_url"])]
+        verified = {}
+        for profile, route in routes:
+            if not route:
+                continue
+            if cancel_event is not None and cancel_event.is_set():
+                raise RuntimeError("Teste cancelado.")
+            parsed = urlparse(route)
+            if parsed.hostname != ip:
+                report(number, route, profile, False, "endpoint diferente; rota antiga não testada", decision="pending_endpoint")
+                continue
+            if parsed.scheme == "dvrip":
+                query = parse_qs(parsed.query)
+                native = (query.get("channel") or [""])[0]
+                subtype = (query.get("subtype") or [""])[0]
+                if not native.isdigit() or int(native) != number - 1 or subtype not in {"0", "1"}:
+                    report(number, route, profile, False, "índice nativo ambíguo", decision="pending_identity")
+                    continue
+                probe = probe_dvrip_media(ip, username, password, channel=int(native), subtype=int(subtype), timeout=4.0)
+                ok, detail = probe.ok, getattr(probe, "detail", "sem confirmação")
+                codec = getattr(probe, "codec", "")
+            elif parsed.scheme == "rtsp":
+                ok, detail = validate_rtsp_media(route, username, password, timeout=4.0)
+                codec = ""
+            else:
+                continue
+            report(number, route, profile, ok, detail, decision="retained_known_identity" if ok else "temporary_failure_preserve_inventory", codec=codec)
+            if ok:
+                verified[profile] = route
+        if verified:
+            chosen = verified.get("Main") or verified["Sub"]
+            channels.append(RecorderChannel(number, row["name"], chosen, True, 200,
+                row.get("detail") or "Rota direta • IT-Blue X3 • identidade anterior preservada",
+                source_name=row.get("source_name") or row["name"],
+                # Companion previously confirmed routes survive a transient failure.
+                main_rtsp_url=row.get("main_rtsp_url") or verified.get("Main", ""),
+                sub_rtsp_url=row.get("sub_rtsp_url") or verified.get("Sub", ""),
+                route_kind="direct", channel_kind="ip",
+                **{key:row[key] for key in ("audio_mode", "audio_codec", "audio_sample_rate", "audio_channels", "audio_detail") if key in row}))
+    known_validated = {channel.channel for channel in channels}
     native_hints = {}
     try:
         native_hints = dvrip_multilens_hints(ip, username, password, timeout=2.5)
@@ -540,9 +601,8 @@ def _scan_itblue_x3_multilens_rtsp(ip: str, username: str, password: str, progre
             f"rtsp://{ip}:554/onvif{profile}", f"rtsp://{ip}:554/onvif{profile + 1}",
         ))
 
-    channels: list[RecorderChannel] = []
     signatures: list = []
-    accepted_urls: list[str] = []
+    accepted_urls: list[str] = [channel.rtsp_url for channel in channels]
     seen_pairs: set[tuple[str, str]] = set()
     logical_with_video: set[str] = set()
     total = len(candidates)
@@ -567,12 +627,14 @@ def _scan_itblue_x3_multilens_rtsp(ip: str, username: str, password: str, progre
             progress(f"IT-Blue X3: {idx}/{total} • procurando visão distinta • {label}…")
 
         main_ok, main_detail = validate_rtsp_media(main_url, username, password, timeout=3.2)
+        report(number, main_url, "Main", main_ok, main_detail)
         sub_ok = False
         sub_detail = ""
         chosen = main_url if main_ok else ""
         chosen_detail = main_detail if main_ok else ""
         if not main_ok and sub_url:
             sub_ok, sub_detail = validate_rtsp_media(sub_url, username, password, timeout=3.2)
+            report(number, sub_url, "Sub", sub_ok, sub_detail)
             if sub_ok:
                 chosen, chosen_detail = sub_url, sub_detail
         if not chosen:
@@ -586,15 +648,19 @@ def _scan_itblue_x3_multilens_rtsp(ip: str, username: str, password: str, progre
             if channels:
                 if progress:
                     progress(f"IT-Blue X3: {label} tem vídeo, mas sem assinatura visual; não promovido como nova lente.")
+                report(number, chosen, "Main" if main_ok else "Sub", True, chosen_detail, decision="deferred_missing_visual_identity")
                 continue
         elif _same_visual_stream(signature, signatures, threshold=22):
             if progress:
-                progress(f"IT-Blue X3: {label} repete a mesma lente; alias descartado.")
+                progress(f"IT-Blue X3: {label} tem assinatura parcial semelhante; nova identidade adiada, sem remover lente conhecida.")
+            report(number, chosen, "Main" if main_ok else "Sub", True, chosen_detail, decision="deferred_similar_partial_signature")
             continue
         elif accepted_urls and _paired_visual_alias(chosen, accepted_urls, username, password, threshold=26):
             if progress:
-                progress(f"IT-Blue X3: {label} coincide com uma lente já aceita em captura simultânea; alias descartado.")
+                progress(f"IT-Blue X3: {label} com comparação inconclusiva/possível alias; nova identidade adiada.")
+            report(number, chosen, "Main" if main_ok else "Sub", True, chosen_detail, decision="deferred_paired_comparison_inconclusive_or_alias")
             continue
+        report(number, chosen, "Main" if main_ok else "Sub", True, chosen_detail, decision="validated_new_distinct_view")
         if signature is not None:
             signatures.append(signature)
         accepted_urls.append(chosen)
@@ -603,8 +669,10 @@ def _scan_itblue_x3_multilens_rtsp(ip: str, username: str, password: str, progre
         # discover its companion profile. This materially shortens field scans.
         if main_ok and not sub_ok and sub_url:
             sub_ok, sub_detail = validate_rtsp_media(sub_url, username, password, timeout=3.2)
+            report(number, sub_url, "Sub", sub_ok, sub_detail)
         elif sub_ok and not main_ok and main_url:
             main_ok, main_detail = validate_rtsp_media(main_url, username, password, timeout=3.2)
+            report(number, main_url, "Main", main_ok, main_detail)
 
         source_name = "Lente PTZ" if number == 1 else f"Lente fixa {number - 1}"
         channel_name = f"Câmera {number:02d}"
@@ -623,6 +691,8 @@ def _scan_itblue_x3_multilens_rtsp(ip: str, username: str, password: str, progre
     # deduplication, while an OPMonitor channel has a stable hardware slot.
     native_candidates = (0, 1, 2) if not any(ch.channel == 1 for ch in channels) else (1, 2)
     for native_channel in native_candidates:
+        if native_channel + 1 in known_validated:
+            continue
         if native_channel == 0 and any(ch.channel == 1 for ch in channels):
             continue
         if cancel_event is not None and cancel_event.is_set():
@@ -642,6 +712,9 @@ def _scan_itblue_x3_multilens_rtsp(ip: str, username: str, password: str, progre
             sub_probe = probe_dvrip_media(
                 ip, username, password, channel=native_channel, subtype=1, timeout=3.0
             )
+        for profile, probe, subtype in (("Main", main_probe, 0), ("Sub", sub_probe, 1)):
+            if probe is not None:
+                report(native_channel + 1, f"dvrip://{ip}:34567?channel={native_channel}&subtype={subtype}", profile, probe.ok, getattr(probe, "detail", "sem confirmação"), codec=getattr(probe, "codec", ""), native_index=native_channel)
         if not main_probe.ok and not (sub_probe and sub_probe.ok):
             if progress:
                 progress(f"IT-Blue X3: DVRIP canal {native_channel} sem vídeo no Main/Sub • "
@@ -655,13 +728,16 @@ def _scan_itblue_x3_multilens_rtsp(ip: str, username: str, password: str, progre
         # A response on a distinct DVRIP channel number does not prove a
         # distinct image. Decode and compare alongside the PTZ and accepted
         # fixed lenses before replacing any route or advertising a new one.
-        native_sig = _route_frame_signature(chosen, username, password)
-        if native_sig is None or (other_urls and _paired_visual_alias(chosen, other_urls, username, password, threshold=26)):
+        known_route = chosen in confirmed_urls.get(number, set())
+        native_sig = None if known_route else _route_frame_signature(chosen, username, password)
+        if not known_route and (native_sig is None or (other_urls and _paired_visual_alias(chosen, other_urls, username, password, threshold=26))):
             if progress:
                 progress(f"IT-Blue X3: DVRIP canal {native_channel} sem imagem distinta comprovada; rota não promovida.")
+            report(number, chosen, "Main" if main_probe.ok else "Sub", True, getattr(main_probe, "detail", ""), decision="deferred_native_visual_identity")
             # The RTSP route in this same slot has already passed the visual
             # test; retain it if native comparison was inconclusive.
             continue
+        report(number, chosen, "Main" if main_probe.ok else "Sub", True, getattr(main_probe, "detail", ""), decision="retained_known_identity" if known_route else "validated_new_distinct_view")
         if native_channel == 0:
             source_name = "Lente PTZ"
         else:
@@ -705,6 +781,7 @@ def scan_direct_camera_streams(
     rtsp_url: str = "",
     progress=None,
     cancel_event: Event | None = None,
+    previous_channels=(),
 ) -> DirectCameraScanResult:
     """Resolve and *media-validate* one direct IP camera channel.
 
@@ -752,10 +829,11 @@ def scan_direct_camera_streams(
             )
 
     if provider == "it-blue":
-        x3_channels = _scan_itblue_x3_multilens_rtsp(ip, username, password, progress, cancel_event)
-        if x3_channels:
+        diagnostics = []
+        x3_channels = _scan_itblue_x3_multilens_rtsp(ip, username, password, progress, cancel_event, previous_channels=previous_channels, diagnostics=diagnostics)
+        if x3_channels or any(previously_confirmed(row) for row in previous_channels):
             return DirectCameraScanResult(
-                channels=x3_channels,
+                channels=x3_channels, diagnostics=diagnostics,
                 manufacturer=identity.get("manufacturer", ""),
                 model=identity.get("model", ""),
                 firmware=identity.get("firmware", ""),
