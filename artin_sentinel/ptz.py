@@ -9,6 +9,7 @@ requests; no background movement or automatic tracking control is performed.
 
 from dataclasses import dataclass
 from html import escape
+from math import isfinite
 from time import sleep
 from urllib.parse import urlparse, urlunparse
 from xml.etree import ElementTree as ET
@@ -76,22 +77,24 @@ def discover_onvif_ptz_context(
             token = ""
             for elem in profiles_root.iter():
                 if _local(elem.tag) == "Profiles" and elem.attrib.get("token"):
-                    token = elem.attrib["token"]
-                    # Prefer a profile that actually exposes PTZConfiguration.
+                    # A media profile alone is not evidence of PTZ capability.
                     has_ptz = any(_local(child.tag) == "PTZConfiguration" for child in elem.iter())
                     if has_ptz:
+                        token = elem.attrib["token"]
                         break
             if not token:
-                raise RuntimeError("ONVIF não retornou Media Profile utilizável")
+                raise RuntimeError("ONVIF não retornou Media Profile com PTZConfiguration")
             return OnvifPtzContext(device_url, media_url, ptz_url, token)
         except Exception as exc:  # try the next device-service candidate
             last_error = exc
     if last_error:
-        raise RuntimeError(f"ONVIF PTZ indisponível: {type(last_error).__name__}: {last_error}")
+        raise RuntimeError(f"ONVIF PTZ indisponível: {type(last_error).__name__}")
     raise RuntimeError("ONVIF PTZ indisponível")
 
 
 def _velocity(direction: str, speed: float) -> tuple[float, float, float]:
+    if not isfinite(float(speed)):
+        raise ValueError("Velocidade PTZ inválida")
     speed = max(0.05, min(float(speed), 1.0))
     direction = (direction or "").lower()
     values = {
@@ -124,6 +127,7 @@ def continuous_move(
 
     A Timeout is included so a dropped Stop request cannot leave a camera moving.
     """
+    direction = (direction or "").lower()
     x, y, z = _velocity(direction, speed)
     token = escape(context.profile_token, quote=True)
     timeout_seconds = max(0.10, min(float(timeout_seconds), 1.5))
@@ -191,13 +195,15 @@ def pulse_move(
 ) -> str:
     """Resolve ONVIF PTZ, move briefly, then stop. Suitable for GUI button taps."""
     context = discover_onvif_ptz_context(ip, username, password, onvif_url)
-    continuous_move(context, username, password, direction, speed, timeout_seconds=max(duration + 0.20, 0.35))
-    sleep(max(0.08, min(float(duration), 1.0)))
     try:
-        stop(context, username, password)
-    except Exception:
-        # ContinuousMove carries a bounded Timeout, so failed Stop is still safe.
-        pass
+        continuous_move(context, username, password, direction, speed, timeout_seconds=max(duration + 0.20, 0.35))
+        sleep(max(0.08, min(float(duration), 1.0)))
+    finally:
+        try:
+            stop(context, username, password)
+        except Exception:
+            # ContinuousMove carries a bounded Timeout, so failed Stop is still safe.
+            pass
     return f"PTZ ONVIF: {direction}"
 
 
@@ -219,7 +225,9 @@ def start_move_provider(
     safety_timeout: float = 1.2,
 ) -> str:
     """Start PTZ through the provider-selected local backend."""
-    backend = str(backend or "onvif").lower()
+    backend = str(backend or "").lower()
+    if backend not in {"onvif", "dvrip"}:
+        raise ValueError("Backend PTZ indisponível")
     if backend == "dvrip":
         from .xm_dvrip import dvrip_ptz_start
         return dvrip_ptz_start(ip, username, password, direction, speed)
@@ -236,7 +244,9 @@ def stop_device_provider(
     direction: str = "",
     speed: float = 0.45,
 ) -> str:
-    backend = str(backend or "onvif").lower()
+    backend = str(backend or "").lower()
+    if backend not in {"onvif", "dvrip"}:
+        raise ValueError("Backend PTZ indisponível")
     if backend == "dvrip":
         from .xm_dvrip import dvrip_ptz_stop
         return dvrip_ptz_stop(ip, username, password, direction, speed)
@@ -254,7 +264,9 @@ def pulse_move_provider(
     *,
     backend: str = "onvif",
 ) -> str:
-    backend = str(backend or "onvif").lower()
+    backend = str(backend or "").lower()
+    if backend not in {"onvif", "dvrip"}:
+        raise ValueError("Backend PTZ indisponível")
     if backend == "dvrip":
         from .xm_dvrip import dvrip_ptz_start, dvrip_ptz_stop
         dvrip_ptz_start(ip, username, password, direction, speed)

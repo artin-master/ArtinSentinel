@@ -2642,6 +2642,8 @@ class MainWindow(QMainWindow):
             self.stop_live_audio()
 
     def stop_all_live_streams(self):
+        if getattr(self, "_ptz_active_direction", ""):
+            self.stop_selected_ptz_hold()
         self.stop_talkback()
         sessions = list(self.live_sessions.values())
         self.live_sessions.clear()
@@ -3891,7 +3893,7 @@ class MainWindow(QMainWindow):
                 and "it-blue x3" in str(channel["detail"] or "").casefold()):
             profile_key = "it-blue-x3-we2q"
         known = ptz_capability(provider=provider_name, profile_key=profile_key)
-        x3_hint = profile_key == "it-blue-x3-we2q" or any(token in model_text for token in ("x3-we2q", "xm535d1", "speed dome", "speeddome", "ball"))
+        x3_hint = profile_key == "it-blue-x3-we2q"
         # Generic Web Viewer identities can still have an X3 lens inventory.
         fixed_lens = "lente fixa" in str(channel["source_name"] or "").casefold()
         # X3 has one moving primary lens plus fixed auxiliary views. Primary
@@ -3909,7 +3911,9 @@ class MainWindow(QMainWindow):
             known["scope"] = "primary"
         # Recorder-mediated Coaxitron/ISAPI PTZ stays visible in Capability Mapping
         # but is not incorrectly sent to a direct-camera endpoint.
-        supported = bool(scope_ok and (known.get("direct_control") or x3_hint))
+        direct_route = str(channel["route_kind"] or "") == "direct"
+        supported = bool(scope_ok and direct_route and known.get("direct_control")
+                         and known.get("backend") in {"onvif", "dvrip"})
         zoom_supported = bool(supported and known.get("zoom"))
         return device, channel, known, supported, zoom_supported
 
@@ -3949,89 +3953,89 @@ class MainWindow(QMainWindow):
         if hasattr(self, "ptz_section"):
             self.ptz_section.setVisible(show_section)
         self.ptz_capability_badge.setText(badge)
-        self.ptz_capability_badge.setVisible(bool(badge) and not enabled)
+        self.ptz_capability_badge.setVisible(bool(badge))
         self.ptz_status_label.setText(text)
         self.ptz_status_label.setVisible(bool(text))
 
-    def _submit_ptz(self, action: str, direction: str = "", *, quiet: bool = False):
-        if action == "start" and getattr(self, "_ptz_command_pending", False):
-            return
+    def _ptz_target_for_selected(self, direction: str = ""):
         tile = self.selected_video_tile
         ctx = self._ptz_context_for_tile(tile) if tile else None
         if not ctx:
-            return
-        device, _channel, known, supported, _zoom_supported = ctx
-        if not supported:
-            return
-        backend = str(known.get("backend") or "onvif")
+            return None
+        device, _channel, known, supported, zoom_supported = ctx
+        if not supported or (direction.startswith("zoom") and not zoom_supported):
+            return None
         credentials = self._credentials_for_device(int(device["id"]))
         if not credentials:
             self.ptz_status_label.setText("Credencial necessária para PTZ local.")
             self.ptz_status_label.show()
-            return
-        username, password = credentials
-        ip = str(device["ip"] or "")
-        onvif_url = str(device["onvif_url"] or "")
-        speed = max(0.10, min(self.ptz_speed_slider.value() / 100.0, 1.0))
-        name = str(device["name"] or ip)
-        if not quiet:
-            direction_labels = {
-                "up": "cima", "down": "baixo", "left": "esquerda", "right": "direita",
-                "up-left": "cima/esquerda", "up-right": "cima/direita",
-                "down-left": "baixo/esquerda", "down-right": "baixo/direita",
-                "zoom-in": "zoom +", "zoom-out": "zoom −",
-            }
-            if action == "stop":
-                self.ptz_status_label.setText("Parando PTZ…")
-            else:
-                self.ptz_status_label.setText(f"Movendo: {direction_labels.get(direction, direction or action)}")
-            self.ptz_status_label.show()
+            return None
+        # Capture the original endpoint and credentials in memory. A Site/tile
+        # switch must never redirect a queued Stop to the newly selected device.
+        return {
+            "ip": str(device["ip"] or ""), "username": credentials[0], "password": credentials[1],
+            "onvif_url": str(device["onvif_url"] or ""), "backend": str(known.get("backend") or ""),
+            "speed": max(0.10, min(self.ptz_speed_slider.value() / 100.0, 1.0)),
+            "name": str(device["name"] or device["ip"]), "direction": direction,
+        }
 
+    def _submit_ptz(self, action: str, direction: str = "", *, quiet: bool = False, target=None):
+        if action == "start" and getattr(self, "_ptz_command_pending", False):
+            return False
+        target = target or self._ptz_target_for_selected(direction)
+        if not target:
+            return False
+        # Worker threads consume only captured values, never widgets/selection.
+        values = {key: target[key] for key in ("ip", "username", "password", "onvif_url", "speed", "backend")}
+        name = target["name"]
+        direction = direction or target["direction"]
+        if not quiet:
+            self.ptz_status_label.setText("Parando PTZ…" if action == "stop" else f"Movendo: {direction}")
+            self.ptz_status_label.show()
         if action == "start":
             self._ptz_command_pending = True
 
         def run():
             try:
                 if action == "stop":
-                    stop_direction = direction or getattr(self, "_ptz_last_direction", "")
-                    message = stop_device_provider(
-                        ip, username, password, onvif_url,
-                        backend=backend, direction=stop_direction, speed=speed,
-                    )
+                    message = stop_device_provider(**values, direction=direction)
                 elif action == "start":
-                    message = start_move_provider(
-                        ip, username, password, onvif_url, direction, speed=speed, backend=backend,
-                    )
+                    message = start_move_provider(**values, direction=direction)
                 else:
-                    message = pulse_move_provider(
-                        ip, username, password, onvif_url, direction, speed=speed, backend=backend,
-                    )
-                self.ptz_results.put((True, name, message))
+                    message = pulse_move_provider(**values, direction=direction)
+                self.ptz_results.put((True, name, message, action))
             except Exception as exc:
-                self.ptz_results.put((False, name, f"{type(exc).__name__}: {exc}"))
+                # Transport exceptions can contain URLs/credentials.
+                self.ptz_results.put((False, name, type(exc).__name__, action))
         self.ptz_executor.submit(run)
+        return True
 
     def start_selected_ptz_hold(self, direction: str):
-        if not direction:
+        if not direction or getattr(self, "_ptz_command_pending", False):
             return
+        if getattr(self, "_ptz_active_direction", ""):
+            self.stop_selected_ptz_hold()
+        target = self._ptz_target_for_selected(direction)
+        if not target:
+            return
+        self._ptz_hold_target = target
         self._ptz_active_direction = direction
         self._ptz_last_direction = direction
-        self._submit_ptz("start", direction)
-        if not self.ptz_hold_timer.isActive():
-            self.ptz_hold_timer.start()
+        self._submit_ptz("start", direction, target=target)
+        self.ptz_hold_timer.start()
 
     def renew_selected_ptz_hold(self):
         direction = getattr(self, "_ptz_active_direction", "")
         if direction:
-            self._submit_ptz("start", direction, quiet=True)
+            self._submit_ptz("start", direction, quiet=True, target=self._ptz_hold_target)
 
     def stop_selected_ptz_hold(self):
-        was_active = bool(getattr(self, "_ptz_active_direction", ""))
+        target = getattr(self, "_ptz_hold_target", None)
         self._ptz_active_direction = ""
+        self._ptz_hold_target = None
         if hasattr(self, "ptz_hold_timer"):
             self.ptz_hold_timer.stop()
-        if was_active or self.selected_video_tile is not None:
-            self._submit_ptz("stop", quiet=True)
+        self._submit_ptz("stop", quiet=True, target=target)
 
     def move_selected_ptz(self, direction: str):
         # Kept for keyboard/menu compatibility: a bounded pulse remains safe.
@@ -4043,10 +4047,13 @@ class MainWindow(QMainWindow):
     def poll_ptz_results(self):
         while True:
             try:
-                ok, name, message = self.ptz_results.get_nowait()
+                ok, name, message, action = self.ptz_results.get_nowait()
             except Empty:
                 break
-            self._ptz_command_pending = False
+            if action == "start":
+                self._ptz_command_pending = False
+            if not ok and action == "start" and getattr(self, "_ptz_active_direction", ""):
+                self.stop_selected_ptz_hold()
             if ok:
                 if getattr(self, "_ptz_active_direction", ""):
                     direction_labels = {
@@ -9656,7 +9663,7 @@ class MainWindow(QMainWindow):
         self.monitor.stop()
         self.stop_all_live_streams()
         self.recorder_executor.shutdown(wait=False, cancel_futures=True)
-        self.ptz_executor.shutdown(wait=False, cancel_futures=True)
+        self.ptz_executor.shutdown(wait=False, cancel_futures=False)
         self.audio_executor.shutdown(wait=False, cancel_futures=True)
         self.db.close()
         super().closeEvent(event)
