@@ -2543,33 +2543,6 @@ class MainWindow(QMainWindow):
             self.ptz_buttons[key] = btn
         ptz_panel_layout.addWidget(self.ptz_pad, 0, Qt.AlignHCenter)
 
-        zoom_caption = QLabel("ZOOM")
-        zoom_caption.setObjectName("PtzControlCaption")
-        ptz_panel_layout.addWidget(zoom_caption)
-        zoom_row = QHBoxLayout()
-        zoom_row.setSpacing(6)
-        zoom_out = QToolButton()
-        zoom_out.setObjectName("PtzZoomButton")
-        zoom_out.setText("−")
-        zoom_out.setToolTip("Zoom out • pressione e segure")
-        zoom_out.setEnabled(False)
-        zoom_out.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        zoom_in = QToolButton()
-        zoom_in.setObjectName("PtzZoomButton")
-        zoom_in.setText("+")
-        zoom_in.setToolTip("Zoom in • pressione e segure")
-        zoom_in.setEnabled(False)
-        zoom_in.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        zoom_out.pressed.connect(lambda: self.start_selected_ptz_hold("zoom-out"))
-        zoom_out.released.connect(self.stop_selected_ptz_hold)
-        zoom_in.pressed.connect(lambda: self.start_selected_ptz_hold("zoom-in"))
-        zoom_in.released.connect(self.stop_selected_ptz_hold)
-        zoom_row.addWidget(zoom_out)
-        zoom_row.addWidget(zoom_in)
-        self.ptz_buttons["zoom-out"] = zoom_out
-        self.ptz_buttons["zoom-in"] = zoom_in
-        ptz_panel_layout.addLayout(zoom_row)
-
         speed_row = QHBoxLayout()
         speed_row.setSpacing(7)
         speed_caption = QLabel("VELOCIDADE")
@@ -4040,7 +4013,6 @@ class MainWindow(QMainWindow):
         tile = self.selected_video_tile
         ctx = self._ptz_context_for_tile(tile) if tile else None
         enabled = False
-        zoom_enabled = False
         show_section = False
         text = ""
         badge = ""
@@ -4050,7 +4022,6 @@ class MainWindow(QMainWindow):
             mode = str(known.get("mode") or "unknown")
             show_section = bool(supported or mode == "recorder-mediated")
             enabled = bool(supported and creds)
-            zoom_enabled = bool(enabled and zoom_supported)
             if supported and creds:
                 backend = str(known.get("backend") or "onvif").upper()
                 text = "PTZ disponível"
@@ -4064,10 +4035,7 @@ class MainWindow(QMainWindow):
         if not enabled and getattr(self, "_ptz_active_direction", ""):
             self.stop_selected_ptz_hold()
         for key, btn in self.ptz_buttons.items():
-            if key in {"zoom-in", "zoom-out"}:
-                btn.setEnabled(zoom_enabled)
-            else:
-                btn.setEnabled(enabled)
+            btn.setEnabled(enabled)
         self.ptz_speed_slider.setEnabled(enabled)
         if hasattr(self, "ptz_section"):
             self.ptz_section.setVisible(show_section)
