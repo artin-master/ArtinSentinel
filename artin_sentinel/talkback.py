@@ -29,6 +29,7 @@ from urllib.parse import urlparse, quote, quote_plus
 from urllib.request import parse_http_list, parse_keqv_list
 
 from . import __version__
+from .media_process import terminate_media_process
 from .log_viewer import sanitize_log_text
 from .intelbras_http import API_VERSION_PATH, POST_AUDIO_PATH, query_talkback_buffer_empty
 from .intelbras_netsdk import (
@@ -384,11 +385,41 @@ def _terminate_process_nonblocking(proc: subprocess.Popen | None, grace: float =
                 proc.kill()
             except OSError:
                 pass
+            try:
+                proc.wait(timeout=0.5)
+            except Exception:
+                pass
 
     threading.Thread(target=reap, name="sentinel-talkback-reaper", daemon=True).start()
 
 
-class XmDvripTalkbackSession:
+class _CaptureLifecycle:
+    """Cancellation/ownership only; device handshakes stay with each transport."""
+
+    def wait_closed(self, timeout: float = 1.0) -> bool:
+        return self._finished.wait(max(0.0, timeout))
+
+    def _adopt_capture(self, process) -> bool:
+        with self._process_lock:
+            if not self._stop.is_set():
+                self._process = process
+                return True
+        terminate_media_process(process)
+        return False
+
+    def _request_stop(self) -> None:
+        with self._process_lock:
+            repeated = self._stop.is_set()
+            self._stop.set()
+            process = self._process
+        if not repeated:
+            self._push(self.status, "Encerrando talkback…")
+            _terminate_process_nonblocking(process)
+        if self._thread is None:
+            self._finished.set()
+
+
+class XmDvripTalkbackSession(_CaptureLifecycle):
     """Capture a local microphone and send G.711 A-law through DVRIP OPTalk.
 
     The transport remains experimental. 0.2.35 follows the observed XM/iCSee
@@ -419,6 +450,7 @@ class XmDvripTalkbackSession:
         self.status: queue.Queue[str] = queue.Queue(maxsize=8)
         self.diagnostics: queue.Queue[str] = queue.Queue(maxsize=24)
         self._stop = threading.Event()
+        self._process_lock = threading.Lock()
         self._finished = threading.Event()
         self._thread: threading.Thread | None = None
         self._process: subprocess.Popen | None = None
@@ -464,9 +496,8 @@ class XmDvripTalkbackSession:
                 return out
 
     def start(self) -> None:
-        if self._thread and self._thread.is_alive():
+        if self._stop.is_set() or (self._thread and self._thread.is_alive()):
             return
-        self._stop.clear()
         self._finished.clear()
         self._thread = threading.Thread(target=self._run_wrapper, name="sentinel-talkback-xm", daemon=True)
         self._thread.start()
@@ -478,8 +509,7 @@ class XmDvripTalkbackSession:
         clean OPTalk Stop. Terminating FFmpeg wakes the microphone read quickly;
         the GUI thread never waits or joins.
         """
-        self._stop.set()
-        _terminate_process_nonblocking(self._process)
+        self._request_stop()
         # Start/Stop cleanup remains in the background worker. Never join here.
 
     def _capture_commands(self) -> list[tuple[str, list[str]]]:
@@ -512,12 +542,16 @@ class XmDvripTalkbackSession:
 
     def _run_wrapper(self) -> None:
         try:
-            self._run()
+            if not self._stop.is_set():
+                self._run()
         except Exception as exc:
             if not self._stop.is_set():
                 self._push(self.status, f"Push-to-Talk falhou: {type(exc).__name__}")
             self._push(self.diagnostics, f"{type(exc).__name__}: {exc}")
         finally:
+            self._stop.set()
+            terminate_media_process(self._process)
+            self._process = None
             self._finished.set()
 
     def _run(self) -> None:
@@ -537,6 +571,8 @@ class XmDvripTalkbackSession:
         # and avoids the independent-session/Ret=504 failure mode.
         with DvripSession(self.host, self.username, self.password, timeout=3.0) as control:
             self._control_session = control
+            if self._stop.is_set():
+                return
             sid = f"0x{int(control.session):08x}"
             self._push(self.diagnostics, f"DVRIP 1/6 • controle autenticado • sessão {sid}")
 
@@ -544,6 +580,8 @@ class XmDvripTalkbackSession:
             try:
                 talk.attach_authenticated_session(control.session, control.sequence)
                 self._talk_session = talk
+                if self._stop.is_set():
+                    return
                 self._push(
                     self.diagnostics,
                     f"DVRIP 2/6 • socket de talk anexado à mesma sessão • seq {int(talk.sequence)}",
@@ -553,6 +591,8 @@ class XmDvripTalkbackSession:
                 # socket. Continue from that exact value on the control socket.
                 control.sync_sequence_from(talk)
                 self._push(self.diagnostics, "DVRIP 3/6 • OPTalk Claim aceito no socket de talk")
+                if self._stop.is_set():
+                    return
                 control.talk_start_no_reply()
                 talk.sync_sequence_from(control)
                 self._push(self.diagnostics, "DVRIP 4/6 • OPTalk Start enviado no canal de controle")
@@ -572,7 +612,8 @@ class XmDvripTalkbackSession:
                             break
                         self._push(self.diagnostics, f"Microfone: tentando {backend}")
                         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
-                        self._process = proc
+                        if not self._adopt_capture(proc):
+                            break
                         try:
                             while not self._stop.is_set() and time.monotonic() - started < self.max_seconds:
                                 if proc.stdout is None:
@@ -616,6 +657,7 @@ class XmDvripTalkbackSession:
                                     err = ""
                                 if err:
                                     self._push(self.diagnostics, f"{backend}: {err[-800:]}")
+                            terminate_media_process(proc)
                             self._process = None
                     if not sent_any and not self._stop.is_set():
                         self._push(self.status, "Microfone não forneceu áudio")
@@ -798,7 +840,7 @@ def _format_postaudio_payload(chunk: bytes, httptype: str, boundary: str) -> byt
     )
 
 
-class IntelbrasHttpTalkbackSession:
+class IntelbrasHttpTalkbackSession(_CaptureLifecycle):
     """Experimental official Intelbras HTTP ``postAudio`` talkback transport.
 
     This transport is exposed only after the same concrete firmware has passed
@@ -828,6 +870,7 @@ class IntelbrasHttpTalkbackSession:
         self.status: queue.Queue[str] = queue.Queue(maxsize=8)
         self.diagnostics: queue.Queue[str] = queue.Queue(maxsize=24)
         self._stop = threading.Event()
+        self._process_lock = threading.Lock()
         self._finished = threading.Event()
         self._thread: threading.Thread | None = None
         self._process: subprocess.Popen | None = None
@@ -868,17 +911,20 @@ class IntelbrasHttpTalkbackSession:
             except queue.Empty: return out
 
     def start(self) -> None:
-        if self._thread and self._thread.is_alive():
-            return
-        self._stop.clear(); self._finished.clear()
+        if self._stop.is_set() or (self._thread and self._thread.is_alive()):
+            return; self._finished.clear()
         self._thread = threading.Thread(target=self._run_wrapper, name='sentinel-talkback-intelbras-http', daemon=True)
         self._thread.start()
 
     def stop(self) -> None:
-        self._stop.set()
-        _terminate_process_nonblocking(self._process)
+        self._request_stop()
         conn = self._connection
         if conn is not None:
+            try:
+                if getattr(conn, "sock", None) is not None:
+                    conn.sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
             try: conn.close()
             except Exception: pass
 
@@ -906,12 +952,16 @@ class IntelbrasHttpTalkbackSession:
 
     def _run_wrapper(self) -> None:
         try:
-            self._run()
+            if not self._stop.is_set():
+                self._run()
         except Exception as exc:
             if not self._stop.is_set():
                 self._push(self.status, f'Push-to-Talk falhou: {type(exc).__name__}')
             self._push(self.diagnostics, f'{type(exc).__name__}: {exc}')
         finally:
+            self._stop.set()
+            terminate_media_process(self._process)
+            self._process = None
             self._finished.set()
 
     def _start_buffer_probe(self, result_queue: queue.Queue) -> None:
@@ -932,6 +982,10 @@ class IntelbrasHttpTalkbackSession:
             audio_channel=self.audio_channel, httptype=httptype, timeout=4.0,
         )
         self._connection = conn
+        if self._stop.is_set():
+            conn.close()
+            self._connection = None
+            raise InterruptedError("Talkback cancelado")
         self._push(self.diagnostics, f'HTTP 1/6 • autenticação {auth_scheme} preparada')
         self._push(
             self.diagnostics,
@@ -959,7 +1013,8 @@ class IntelbrasHttpTalkbackSession:
                     break
                 self._push(self.diagnostics, f'Microfone: tentando {backend}')
                 proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
-                self._process = proc
+                if not self._adopt_capture(proc):
+                    break
                 try:
                     while not self._stop.is_set() and time.monotonic() - started < self.max_seconds:
                         if proc.stdout is None:
@@ -1037,6 +1092,7 @@ class IntelbrasHttpTalkbackSession:
                             err = ''
                         if err:
                             self._push(self.diagnostics, f'{backend}: {err[-800:]}')
+                    terminate_media_process(proc)
                     self._process = None
 
             if buffer_probe_started and not buffer_probe_reported:
@@ -1135,7 +1191,7 @@ def read_audio_packet(stream, size: int, stop_event, deadline: float | None = No
     return bytes(payload) if len(payload) == size else b""
 
 
-class IntelbrasNetSDKTalkbackSession:
+class IntelbrasNetSDKTalkbackSession(_CaptureLifecycle):
     """Experimental direct-camera talkback through the official Intelbras NetSDK.
 
     0.2.42 reproduces the official Linux 05.Talk setup literally and isolates
@@ -1195,6 +1251,7 @@ class IntelbrasNetSDKTalkbackSession:
         self.status: queue.Queue[str] = queue.Queue(maxsize=8)
         self.diagnostics: queue.Queue[str] = queue.Queue(maxsize=32)
         self._stop = threading.Event()
+        self._process_lock = threading.Lock()
         self._finished = threading.Event()
         self._thread: threading.Thread | None = None
         self._process: subprocess.Popen | None = None
@@ -1243,16 +1300,14 @@ class IntelbrasNetSDKTalkbackSession:
                 return out
 
     def start(self) -> None:
-        if self._thread and self._thread.is_alive():
+        if self._stop.is_set() or (self._thread and self._thread.is_alive()):
             return
-        self._stop.clear()
         self._finished.clear()
         self._thread = threading.Thread(target=self._run_wrapper, name="sentinel-talkback-intelbras-netsdk", daemon=True)
         self._thread.start()
 
     def stop(self) -> None:
-        self._stop.set()
-        _terminate_process_nonblocking(self._process)
+        self._request_stop()
 
     def _capture_commands(self, codec: str = "pcm") -> list[tuple[str, list[str]]]:
         ffmpeg = shutil.which("ffmpeg")
@@ -1305,17 +1360,19 @@ class IntelbrasNetSDKTalkbackSession:
 
     def _run_wrapper(self) -> None:
         try:
-            self._run()
+            if not self._stop.is_set():
+                self._run()
         except Exception as exc:
             if not self._stop.is_set():
                 self._push(self.status, f"Push-to-Talk falhou: {type(exc).__name__}")
             self._push(self.diagnostics, f"{type(exc).__name__}: {exc}")
         finally:
+            self._stop.set()
             self._cleanup()
             self._finished.set()
 
     def _cleanup(self) -> None:
-        _terminate_process_nonblocking(self._process)
+        terminate_media_process(self._process)
         self._process = None
         sdk = self._sdk
         if sdk is None:
@@ -1365,6 +1422,8 @@ class IntelbrasNetSDKTalkbackSession:
             detail = ", ".join(failures[:4]) or "sem porta candidata"
             raise ConnectionError(f"NetSDK não autenticou no dispositivo ({detail})")
         self._login_handle = int(login.handle)
+        if self._stop.is_set():
+            return
         protocol_type = sdk.get_protocol_type(self._login_handle)
         protocol_label = {0: "desconhecido", 1: "V2", 2: "V3"}.get(protocol_type, str(protocol_type))
         self._push(
@@ -1384,6 +1443,8 @@ class IntelbrasNetSDKTalkbackSession:
         # MODE3 is deliberately a separate field-test option. On V3 devices it
         # follows the vendor Intelligent Building manual; server mode remains
         # the exact Linux 05.Talk sample path.
+        if self._stop.is_set():
+            return
         audio_port = 0
         if sdk_mode == "v3":
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
@@ -1425,6 +1486,8 @@ class IntelbrasNetSDKTalkbackSession:
                     except Exception:
                         remote_first = f"{int(size)} B"
 
+        if self._stop.is_set():
+            return
         self._audio_callback = CALLBACK(audio_callback)
         callback_ptr = ctypes.cast(self._audio_callback, ctypes.c_void_p)
         sdk.lib.CLIENT_StartTalkEx.argtypes = [ctypes.c_long, ctypes.c_void_p, ctypes.c_long]
@@ -1432,6 +1495,8 @@ class IntelbrasNetSDKTalkbackSession:
         if not talk_handle:
             raise RuntimeError(f"CLIENT_StartTalkEx falhou (0x{sdk.last_error():08x})")
         self._talk_handle = talk_handle
+        if self._stop.is_set():
+            return
         self._push(self.diagnostics, "SDK 5/8 • CLIENT_StartTalkEx aceito")
 
         frames_sent = 0
@@ -1442,6 +1507,8 @@ class IntelbrasNetSDKTalkbackSession:
 
         def send_frame(frame: bytes, label: str) -> bool:
             nonlocal frames_sent, bytes_sent, send_failures
+            if self._stop.is_set():
+                return False
             buf = ctypes.create_string_buffer(frame, len(frame))
             sent = int(sdk.lib.CLIENT_TalkSendData(int(self._talk_handle), buf, len(frame)))
             if sent > 0:
@@ -1486,7 +1553,8 @@ class IntelbrasNetSDKTalkbackSession:
                 selected_label = label
                 self._push(self.diagnostics, f"SDK 6/8 • {test_label} • microfone: tentando {label} • ganho {self.gain_db:+d} dB")
                 proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
-                self._process = proc
+                if not self._adopt_capture(proc):
+                    break
                 if proc.stdout is None:
                     _terminate_process_nonblocking(proc)
                     continue
@@ -1508,7 +1576,7 @@ class IntelbrasNetSDKTalkbackSession:
                     delay = next_deadline - time.monotonic()
                     if delay > 0:
                         time.sleep(min(delay, 0.040))
-                _terminate_process_nonblocking(proc)
+                terminate_media_process(proc)
                 self._process = None
                 if got_first or frames_sent:
                     break

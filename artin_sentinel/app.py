@@ -2802,6 +2802,11 @@ class MainWindow(QMainWindow):
             self.live_sessions[b] = sa
         if sb is not None:
             self.live_sessions[a] = sb
+        ma = self.mic_traces.pop(a, None); mb = self.mic_traces.pop(b, None)
+        if ma is not None:
+            self.mic_traces[b] = ma
+        if mb is not None:
+            self.mic_traces[a] = mb
         da = self.live_diag_lines.pop(a, None); db = self.live_diag_lines.pop(b, None)
         if da is not None:
             self.live_diag_lines[b] = da
@@ -4273,6 +4278,8 @@ class MainWindow(QMainWindow):
         return device, channel, info, urls, protocol
 
     def start_talkback_for_tile(self, tile: VideoTile):
+        if getattr(self, "_closing_app", False) or tile not in self.video_tiles or not tile.source:
+            return
         if self.talkback_session is not None:
             return
         ctx = self._talkback_context_for_tile(tile)
@@ -4350,6 +4357,8 @@ class MainWindow(QMainWindow):
         session = self.talkback_session
         if session is not None:
             session.stop()
+            if hasattr(self, "audio_capability_label"):
+                self.audio_capability_label.setText("Encerrando talkback…")
 
     def start_selected_talkback(self):
         if self.selected_video_tile is not None:
