@@ -60,4 +60,4 @@ def test_microphone_test_runs_in_audio_executor_not_qt_event_loop():
     assert "def test_selected_microphone_async" in app
     assert "self.audio_executor.submit(" in app
     assert "probe_microphone_level, microphone" in app
-    assert 'self.microphone_test_btn.setText("TEST")' in app
+    assert 'self.microphone_test_btn.setText("Testar")' in app

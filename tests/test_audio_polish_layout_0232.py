@@ -86,7 +86,7 @@ def test_live_inspector_is_resizable_and_mic_controls_are_wrapped():
     assert "inspector.setMinimumWidth(285)" in app
     assert "inspector.setMaximumWidth(460)" in app
     assert 'self.ui_settings.setValue("live/inspector_width", width)' in app
-    assert "QGridLayout(self.microphone_row)" in app
+    assert "QVBoxLayout(self.microphone_row)" in app
     assert "AdjustToMinimumContentsLengthWithIcon" in app
     assert "QSizePolicy.Ignored" in app
     assert 'Estado atual do áudio:' in app
