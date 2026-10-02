@@ -129,7 +129,8 @@ def test_authentication_rejection_does_not_try_udp_or_main_sub_loop(monkeypatch)
 def test_wrapper_always_finishes_on_decoder_exception(monkeypatch):
     session = live.LiveStreamSession('rtsp://camera/main')
     monkeypatch.setattr(session, '_run', Mock(side_effect=ValueError('invalid')))
-    with pytest.raises(ValueError):
-        session._run_wrapper()
+    session._run_wrapper()
+    assert session.current_state == "unavailable"
+    assert "ValueError" in " ".join(session.drain_diagnostics())
     assert session.finished
     assert session._process is None

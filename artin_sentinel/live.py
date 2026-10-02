@@ -535,6 +535,7 @@ class LiveAudioSession:
         self.current_detail = ""
         self.had_transient_failure = False
         self._volume_attach_thread: threading.Thread | None = None
+        self._reaper_thread: threading.Thread | None = None
 
     def _set_state(self, state: str, detail: str = "", backend: str = "") -> None:
         if self._stop.is_set() and state != "stopped":
@@ -770,7 +771,13 @@ class LiveAudioSession:
         return self._finished.is_set()
 
     def wait_closed(self, timeout: float = 1.0) -> bool:
-        return self._finished.wait(max(0.0, timeout))
+        deadline = time.monotonic() + max(0.0, timeout)
+        finished = self._finished.wait(max(0.0, deadline - time.monotonic()))
+        for worker in (self._volume_thread, self._volume_attach_thread, self._reaper_thread):
+            if worker is not None and worker is not threading.current_thread():
+                worker.join(max(0.0, deadline - time.monotonic()))
+                finished = finished and not worker.is_alive()
+        return finished
 
     def _run_wrapper(self) -> None:
         failures = 0
@@ -787,7 +794,13 @@ class LiveAudioSession:
                 self._push(self.status, f"Áudio: reconectando em {delay:g} s")
                 if self._stop.wait(delay):
                     break
+        except Exception as exc:
+            if not self._stop.is_set():
+                self._set_state("error", type(exc).__name__)
+                self._push(self.status, "Áudio indisponível • falha no player local")
+                self._push(self.diagnostics, f"Player interrompido: {type(exc).__name__}")
         finally:
+            self._stop.set()
             terminate_media_process(self._process)
             self._process = None
             self._finished.set()
@@ -807,9 +820,10 @@ class LiveAudioSession:
             try:
                 proc.terminate()
             except OSError:
-                return
+                pass
 
             def reap() -> None:
+                self._reaper_thread = threading.current_thread()
                 try:
                     proc.wait(timeout=0.7)
                 except Exception:
@@ -1167,6 +1181,11 @@ class LiveStreamSession:
     def _run_wrapper(self) -> None:
         try:
             self._run()
+        except Exception as exc:
+            if not self._stop.is_set():
+                self.current_state = "unavailable"
+                self._push_status("Stream indisponível • veja Diagnóstico")
+                self._push_diag(f"Decoder interrompido: {type(exc).__name__}")
         finally:
             terminate_media_process(self._process)
             self._process = None
@@ -1219,6 +1238,7 @@ class LiveStreamSession:
         return items
 
     def _push_status(self, text: str) -> None:
+        text = sanitize_text(text, self.username, self.password)
         while True:
             try:
                 self.status.put_nowait(text)

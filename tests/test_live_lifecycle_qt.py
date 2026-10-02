@@ -120,6 +120,7 @@ def test_move_active_talkback_tracks_original_channel_and_stops_ptz(window, monk
     monkeypatch.setattr(b, 'mapFromGlobal', lambda point: QPoint(1, 1))
     window.talkback_session = Mock()
     window.talkback_tile_index = 0
+    window._ptz_active_direction = "left"
     window.move_tile_source(a, QPoint())
     assert b.source['channel_id'] == 1
     assert window.talkback_tile_index == 1
@@ -162,3 +163,67 @@ def test_stream_switch_preserves_existing_listening_preference_once(window, monk
     window.toggle_tile_audio.assert_called_once_with(tile)
     source = window.apply_source_to_tile.call_args.args[1]
     assert source.get('forced_stream') == (None if mode == 'auto' else mode)
+
+
+def test_callbacks_and_open_requests_after_shutdown_do_nothing(window, monkeypatch):
+    window._closing_app = True
+    window.db = Mock()
+    window._set_live_audio_bar = Mock()
+    tile = window.video_tiles[0]
+    window.poll_live_streams()
+    window.apply_source_to_tile(tile, dict(tile.source))
+    window.start_talkback_for_tile(tile)
+    window._reset_audio_bar_if_idle(0)
+    assert not window.db.mock_calls
+    window._set_live_audio_bar.assert_not_called()
+
+
+def test_stale_tile_cannot_open_video_or_talkback_in_new_grid(window):
+    old = window.video_tiles.pop(0)
+    window.db = Mock()
+    window.apply_source_to_tile(old, dict(old.source))
+    window.start_talkback_for_tile(old)
+    assert not window.db.mock_calls
+
+
+def test_shutdown_rejects_ptz_start_but_preserves_original_stop(window):
+    window._closing_app = True
+    window.ptz_executor = Mock()
+    assert not window._submit_ptz('start', 'left')
+    window.start_selected_ptz_hold('left')
+    window.ptz_executor.submit.assert_not_called()
+    target = dict(ip='192.0.2.1', username='admin', password='pw', onvif_url='',
+                  speed=0.45, backend='dvrip', name='Camera', direction='left', source_key=(0, 1, 1))
+    assert window._submit_ptz('stop', quiet=True, target=target)
+    window.ptz_executor.submit.assert_called_once()
+
+
+def test_detached_focus_rebuild_and_close_leave_no_hidden_tiles_or_visibility_retry():
+    application = QApplication.instance() or QApplication([])
+    database = Mock()
+    database.list_sites.return_value = []
+    database.list_devices.return_value = []
+    controller = QMainWindow()
+    controller.db, controller.current_site_id, controller.live_audio_volume = database, 1, 75
+    w = DetachedMonitorWindow(controller, 'test')
+    w.apply_source = Mock()
+    first = w.video_tiles[0]
+    first.set_source('Camera', '', '', dict(type='channel', device_id=1, channel_id=1))
+    try:
+        w.toggle_camera_fullscreen(first)
+        assert w._individual_fullscreen_tile is first
+        w.rebuild_grid(4)
+        application.processEvents()
+        assert w._individual_fullscreen_tile is None
+        assert all(not t.isHidden() for t in w.video_tiles)
+        w.close()
+        w._streams_suspended = True
+        w._sync_stream_visibility()
+        w.poll_streams()
+        assert not w.poll_timer.isActive() and not w.visibility_timer.isActive()
+        assert not w.sessions and w.audio_session is None
+    finally:
+        w.close()
+        w.deleteLater()
+        controller.deleteLater()
+        application.processEvents()

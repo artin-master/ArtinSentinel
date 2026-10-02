@@ -369,13 +369,13 @@ def probe_microphone_level(
     return MicrophoneLevelResult(True, mean_db=mean_db, peak_db=peak_db, detail="nível local medido")
 
 
-def _terminate_process_nonblocking(proc: subprocess.Popen | None, grace: float = 0.7) -> None:
+def _terminate_process_nonblocking(proc: subprocess.Popen | None, grace: float = 0.7) -> threading.Thread | None:
     if proc is None or proc.poll() is not None:
         return
     try:
         proc.terminate()
     except OSError:
-        return
+        pass
 
     def reap() -> None:
         try:
@@ -390,14 +390,23 @@ def _terminate_process_nonblocking(proc: subprocess.Popen | None, grace: float =
             except Exception:
                 pass
 
-    threading.Thread(target=reap, name="sentinel-talkback-reaper", daemon=True).start()
+    worker = threading.Thread(target=reap, name="sentinel-talkback-reaper", daemon=True)
+    worker.start()
+    return worker
 
 
 class _CaptureLifecycle:
     """Cancellation/ownership only; device handshakes stay with each transport."""
 
     def wait_closed(self, timeout: float = 1.0) -> bool:
-        return self._finished.wait(max(0.0, timeout))
+        deadline = time.monotonic() + max(0.0, timeout)
+        finished = self._finished.wait(max(0.0, deadline - time.monotonic()))
+        for name in ("_capture_reaper", "_stop_reaper", "_buffer_probe_thread"):
+            worker = getattr(self, name, None)
+            if worker is not None and worker is not threading.current_thread():
+                worker.join(max(0.0, deadline - time.monotonic()))
+                finished = finished and not worker.is_alive()
+        return finished
 
     def _adopt_capture(self, process) -> bool:
         with self._process_lock:
@@ -414,8 +423,8 @@ class _CaptureLifecycle:
             process = self._process
         if not repeated:
             self._push(self.status, "Encerrando talkback…")
-            _terminate_process_nonblocking(process)
-        if self._thread is None:
+            self._stop_reaper = _terminate_process_nonblocking(process)
+        if self._thread is None and process is None:
             self._finished.set()
 
 
@@ -649,7 +658,7 @@ class XmDvripTalkbackSession(_CaptureLifecycle):
                             if sent_any or self._stop.is_set():
                                 break
                         finally:
-                            _terminate_process_nonblocking(proc, grace=0.4)
+                            self._capture_reaper = _terminate_process_nonblocking(proc, grace=0.4)
                             if not sent_any and proc.stderr is not None:
                                 try:
                                     err = proc.stderr.read(2048).decode("utf-8", "replace").strip()
@@ -974,7 +983,8 @@ class IntelbrasHttpTalkbackSession(_CaptureLifecycle):
                 result_queue.put_nowait(result)
             except queue.Full:
                 pass
-        threading.Thread(target=worker, name='sentinel-intelbras-audio-buffer-probe', daemon=True).start()
+        self._buffer_probe_thread = threading.Thread(target=worker, name='sentinel-intelbras-audio-buffer-probe', daemon=True)
+        self._buffer_probe_thread.start()
 
     def _run_framing_attempt(self, httptype: str, commands: list[tuple[str, list[str]]]) -> dict:
         conn, auth_scheme, boundary, initial_code, initial_line = _open_intelbras_postaudio_stream(
@@ -1084,7 +1094,7 @@ class IntelbrasHttpTalkbackSession(_CaptureLifecycle):
                     if attempt_error is not None or sent_any or self._stop.is_set():
                         break
                 finally:
-                    _terminate_process_nonblocking(proc, grace=0.4)
+                    self._capture_reaper = _terminate_process_nonblocking(proc, grace=0.4)
                     if not sent_any and proc.stderr is not None:
                         try:
                             err = proc.stderr.read(2048).decode('utf-8', 'replace').strip()
@@ -1556,7 +1566,7 @@ class IntelbrasNetSDKTalkbackSession(_CaptureLifecycle):
                 if not self._adopt_capture(proc):
                     break
                 if proc.stdout is None:
-                    _terminate_process_nonblocking(proc)
+                    terminate_media_process(proc)
                     continue
                 first_deadline = time.monotonic() + 2.4
                 got_first = False

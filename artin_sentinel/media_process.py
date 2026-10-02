@@ -34,3 +34,24 @@ def terminate_media_process(process, grace: float = 0.5) -> None:
                     pipe.close()
                 except (OSError, ValueError):
                     pass
+
+
+def wait_media_sessions(sessions, timeout: float = 4.0) -> bool:
+    """Wait on one shared shutdown budget after callers requested Stop.
+
+    Native calls remain owned by their worker; Python threads are never killed.
+    Any still-owned child is reaped even if a native call exhausted the budget.
+    """
+    import time
+    deadline = time.monotonic() + max(0.0, timeout)
+    complete = True
+    seen = set()
+    for session in sessions:
+        if session is None or id(session) in seen:
+            continue
+        seen.add(id(session))
+        wait = getattr(session, 'wait_closed', None)
+        if callable(wait):
+            complete = bool(wait(max(0.0, deadline - time.monotonic()))) and complete
+        terminate_media_process(getattr(session, '_process', None), grace=0.1)
+    return complete

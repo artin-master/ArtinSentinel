@@ -76,6 +76,7 @@ from .recorder import scan_intelbras_channels, scan_hikvision_channels, diagnose
 from .ip_camera import scan_direct_camera_streams, DirectCameraScanResult
 from .credential_store import CredentialStore
 from .app_auth import AppAuth
+from .media_process import wait_media_sessions
 from .live import LiveStreamSession, LiveAudioSession, create_live_stream_session, local_media_status, ordered_audio_urls
 from .log_viewer import sanitize_log_text, read_log_tail, filter_log_lines
 from .stream_diagnostics import diagnose_saved_streams, STATE_LABELS as STREAM_STATE_LABELS
@@ -1388,6 +1389,8 @@ class DetachedMonitorWindow(QMainWindow):
         return 10 if n<=16 else 8 if n<=36 else 5 if n<=64 else 3
 
     def apply_source(self,tile,source):
+        if getattr(self, "_closed", False) or tile not in self.video_tiles:
+            return
         self.stop_tile(tile)
         dev=self.db.get_device(int(source.get("device_id",0))); ch=self.db.get_recorder_channel(int(source.get("channel_id",0)))
         if not dev or not ch: tile.set_source("Canal","Fonte não encontrada","Atualize a janela",source); return
@@ -1571,6 +1574,8 @@ class DetachedMonitorWindow(QMainWindow):
         QMessageBox.information(self,"Push-to-Talk","Capacidade bidirecional conhecida, mas o transporte de retorno deste provider ainda não está disponível nesta janela.")
 
     def poll_streams(self):
+        if getattr(self, "_closed", False):
+            return
         for tile in list(self.video_tiles):
             sess=self.sessions.get(tile.index)
             if not sess: continue
@@ -1663,7 +1668,10 @@ class DetachedMonitorWindow(QMainWindow):
     def closeEvent(self,event):
         self._closed = True
         self.visibility_timer.stop()
+        sessions = list(self.sessions.values()) + [self.audio_session]
         self.save_state(); self.stop_all(); self.poll_timer.stop()
+        if not getattr(self.controller, "_closing_app", False):
+            wait_media_sessions(sessions, timeout=1.5)
         if not getattr(self.controller, "_closing_app", False):
             try: self.db.disable_live_window(self.site_id, self.window_key)
             except Exception: pass
@@ -2789,7 +2797,8 @@ class MainWindow(QMainWindow):
         )
         if target is None:
             return
-        self.stop_selected_ptz_hold()
+        if getattr(self, "_ptz_active_direction", ""):
+            self.stop_selected_ptz_hold()
         self._audio_resume_generation = getattr(self, "_audio_resume_generation", 0) + 1
         a, b = source_tile.index, target.index
         if self.talkback_tile_index == a:
@@ -3332,6 +3341,8 @@ class MainWindow(QMainWindow):
         return 3
 
     def apply_source_to_tile(self, tile: VideoTile, source: dict):
+        if getattr(self, "_closing_app", False) or tile not in self.video_tiles:
+            return
         self.stop_tile_stream(tile)
         if source.get("type") != "channel":
             tile.set_source(source.get("title", "Fonte"), "Fonte sem stream de vídeo", "Somente leitura", source)
@@ -3427,6 +3438,8 @@ class MainWindow(QMainWindow):
               "CPU pode passar de 100% em computadores com vários núcleos.")
 
     def poll_live_streams(self):
+        if getattr(self, "_closing_app", False):
+            return
         for tile in list(self.video_tiles):
             session = self.live_sessions.get(tile.index)
             if session is None:
@@ -3511,7 +3524,8 @@ class MainWindow(QMainWindow):
                 if failed_identity:
                     self._set_live_audio_bar("failure", "interrompido")
                     self.live_audio_identity = ""
-                    QTimer.singleShot(2500, lambda: self._set_live_audio_bar("off") if self.live_audio_session is None else None)
+                    QTimer.singleShot(2500, lambda generation=getattr(self, "_audio_resume_generation", 0):
+                                      self._reset_audio_bar_if_idle(generation))
                 self.refresh_selected_audio_controls()
 
         talk = self.talkback_session
@@ -4045,6 +4059,8 @@ class MainWindow(QMainWindow):
         }
 
     def _submit_ptz(self, action: str, direction: str = "", *, quiet: bool = False, target=None):
+        if action != "stop" and getattr(self, "_closing_app", False):
+            return False
         if action == "start" and getattr(self, "_ptz_command_pending", False):
             return False
         target = target or self._ptz_target_for_selected(direction)
@@ -4077,6 +4093,8 @@ class MainWindow(QMainWindow):
         return True
 
     def start_selected_ptz_hold(self, direction: str):
+        if getattr(self, "_closing_app", False):
+            return
         if not direction or getattr(self, "_ptz_command_pending", False):
             return
         if getattr(self, "_ptz_active_direction", ""):
@@ -4197,6 +4215,11 @@ class MainWindow(QMainWindow):
         self.live_audio_identity = ""
         self._set_live_audio_bar("off")
         self.refresh_selected_audio_controls()
+
+    def _reset_audio_bar_if_idle(self, generation):
+        if (not getattr(self, "_closing_app", False) and self.live_audio_session is None
+                and generation == getattr(self, "_audio_resume_generation", 0)):
+            self._set_live_audio_bar("off")
 
     def _resume_audio_after_talkback(self, tile, source, generation, audio_generation):
         if (getattr(self, "_closing_app", False) or tile not in self.video_tiles
@@ -9771,6 +9794,15 @@ class MainWindow(QMainWindow):
         if not password_dialog(self.app_auth, "Sair do Sentinel", "Digite a senha para sair:", parent=self):
             event.ignore()
             return
+        shutdown_sessions = list(self.live_sessions.values()) + [
+            self.live_audio_session, self.talkback_session,
+            self.playback_session, self.playback_audio_session,
+        ]
+        shutdown_sessions.extend(self.playback_sessions.values())
+        for window in self.detached_windows.values():
+            shutdown_sessions.extend(window.sessions.values())
+            shutdown_sessions.append(window.audio_session)
+        self._closing_app = True
         self.save_live_workspace()
         if self.manual_recording is not None:
             self.manual_recording.stop()
@@ -9791,6 +9823,9 @@ class MainWindow(QMainWindow):
         self.ptz_poll_timer.stop()
         self.monitor.stop()
         self.stop_all_live_streams()
+        self.performance_timer.stop()
+        self.discovery_clock.stop()
+        wait_media_sessions(shutdown_sessions, timeout=4.0)
         self.recorder_executor.shutdown(wait=False, cancel_futures=True)
         self.ptz_executor.shutdown(wait=False, cancel_futures=False)
         self.audio_executor.shutdown(wait=False, cancel_futures=True)
