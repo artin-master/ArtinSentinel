@@ -175,3 +175,22 @@ def probe_recorder_channel_health(
         for channel in rows
         if int(_value(channel, "channel_no", 0) or 0) > 0
     ]
+
+
+def channel_health_label(channel: Any, *, device_online: bool = True) -> str:
+    """Presentation only: recovered is the first positive check after a problem.
+
+    Subsequent healthy checks return OK. No new persistent state is introduced.
+    """
+    if not device_online:
+        return "EQUIP. OFFLINE"
+    state = str(_value(channel, "health_state", HEALTH_UNKNOWN) or HEALTH_UNKNOWN)
+    last_ok = str(_value(channel, "health_last_ok_at", "") or "")
+    problem = str(_value(channel, "health_last_problem_at", "") or "")
+    changed = str(_value(channel, "health_last_change_at", "") or "")
+    if state == HEALTH_OK and problem and last_ok > problem and changed == last_ok:
+        return "RECUPERADO"
+    return {
+        HEALTH_OK: "OK", HEALTH_NO_SIGNAL: "SEM SINAL", HEALTH_OFFLINE: "OFFLINE",
+        HEALTH_DEGRADED: "CONFIRMANDO", HEALTH_UNVERIFIED: "INCONCLUSIVO", HEALTH_UNKNOWN: "SEM ESTADO",
+    }.get(state, "SEM ESTADO")

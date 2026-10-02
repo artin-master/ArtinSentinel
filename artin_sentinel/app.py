@@ -113,7 +113,7 @@ from .akdb_sync import (
 from .workspace import SUPPORTED_GRID_COUNTS, smallest_grid_for, next_empty_slot
 from .release_notes import RELEASE_TITLE, RELEASE_NOTES, CHANGELOG_TEXT
 from .ptz import pulse_move_provider, start_move_provider, stop_device_provider
-from .channel_health import probe_recorder_channel_health
+from .channel_health import probe_recorder_channel_health, channel_health_label
 from .performance import process_sample, cpu_percent
 from .mic_trace import MicTrace
 from .config_portability import export_configuration, import_configuration, FORMAT as PORTABLE_FORMAT
@@ -7329,12 +7329,6 @@ class MainWindow(QMainWindow):
             "Falhas RTSP sem telemetria nativa ficam inconclusivas; não comprovam perda de sinal."
         )
         if hasattr(self, "channel_health_table"):
-            state_labels = {
-                "ok": "OK", "offline": "OFFLINE", "no_signal": "SEM SINAL",
-                "degraded": "CONFIRMANDO", "unknown": "SEM ESTADO",
-                "unverified": "INCONCLUSIVO",
-                "device_offline": "EQUIP. OFFLINE",
-            }
             self.channel_health_table.setRowCount(len(health_rows))
             for r, ch in enumerate(health_rows):
                 state = (str(ch["health_state"] or "unknown") if str(ch["device_status"] or "") == "online"
@@ -7345,7 +7339,8 @@ class MainWindow(QMainWindow):
                 if endpoint and int(ch["source_port"] or 0):
                     endpoint = f"{endpoint}:{int(ch['source_port'])}"
                 vals = (
-                    ch["device_name"] or "—", self.db.channel_display_name(ch), state_labels.get(state, state),
+                    ch["device_name"] or "—", self.db.channel_display_name(ch),
+                    channel_health_label(ch, device_online=state != "device_offline"),
                     type_label, endpoint or "—", ch["source_protocol"] or "—",
                     ch["health_last_change_at"] or "—",
                     ("Equipamento offline; canal não verificado agora" if state == "device_offline" else ch["health_detail"] or "—"),
@@ -9436,14 +9431,13 @@ class MainWindow(QMainWindow):
                 audio_text = "—"
             if audio_info.get("codec"):
                 audio_text += f" • {audio_info['codec']}"
-            health_labels = {"ok": "OK", "offline": "OFFLINE", "no_signal": "SEM SINAL", "degraded": "CONFIRMANDO", "unverified": "INCONCLUSIVO", "unknown": "—"}
-            health_state = str(ch["health_state"] or "unknown") if "health_state" in ch.keys() else "unknown"
             source_endpoint = str(ch["source_ip"] or "") if "source_ip" in ch.keys() else ""
             if source_endpoint and "source_port" in ch.keys() and int(ch["source_port"] or 0):
                 source_endpoint += f":{int(ch['source_port'])}"
             source_protocol = str(ch["source_protocol"] or "") if "source_protocol" in ch.keys() else ""
             vals = (
-                ch["channel_no"], source_name, display_name, health_labels.get(health_state, health_state),
+                ch["channel_no"], source_name, display_name,
+                channel_health_label(ch, device_online=str(device["status"] or "") == "online"),
                 source_endpoint or "—", source_protocol or "—", ch["preferred_stream"], audio_text,
                 ch["main_rtsp_url"] or ch["rtsp_url"], ch["sub_rtsp_url"] or "—", ch["detail"],
             )

@@ -1411,7 +1411,10 @@ class Database:
             changed = new_state != old_state
             last_change = now if changed else str(row["health_last_change_at"] or "")
             last_ok = now if raw_state == "ok" else str(row["health_last_ok_at"] or "")
-            last_problem = now if negative else str(row["health_last_problem_at"] or "")
+            # A tentative sample must not turn a short reconnect into a
+            # recorded loss/recovery episode. Existing historical values stay.
+            confirmed_problem = new_state in {"offline", "no_signal"}
+            last_problem = now if confirmed_problem and negative else str(row["health_last_problem_at"] or "")
             self.conn.execute(
                 """UPDATE recorder_channels SET health_state=?,health_detail=?,source_ip=?,source_port=?,
                    source_protocol=?,health_fail_count=?,health_last_checked_at=?,health_last_change_at=?,
@@ -1425,7 +1428,7 @@ class Database:
             )
 
             display = self.channel_display_name(row)
-            if changed and new_state in {"offline", "no_signal"}:
+            if changed and new_state in {"offline", "no_signal"} and old_state not in {"offline", "no_signal"}:
                 if new_state == "offline" and (source_ip or row["source_ip"]):
                     expected = source_ip or str(row["source_ip"] or "")
                     message = f"{device['name']} • {display}: câmera IP configurada {expected} ficou offline/sem mídia."
