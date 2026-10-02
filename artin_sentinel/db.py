@@ -1210,6 +1210,34 @@ class Database:
         )
         self.conn.commit()
 
+    def add_camera_event(self, device_id, event):
+        """Reuse events with fixed, sanitized metadata and inventory-owned scope."""
+        from .camera_events import CameraEvent, EVENT_TYPES
+        if not isinstance(event, CameraEvent) or event.kind not in EVENT_TYPES:
+            raise ValueError("invalid camera event")
+        if event.source != "dvrip-sofia" or event.reason not in {
+            "notification", "safety_timeout", "subscription_stopped",
+        }:
+            raise ValueError("invalid event source/reason")
+        device = self.get_device(device_id)
+        if device is None:
+            raise ValueError("unknown device")
+        if event.channel is not None:
+            channel = self.get_recorder_channel(event.channel)
+            if channel is None or int(channel["device_id"]) != int(device_id):
+                raise ValueError("channel does not belong to device")
+        # timestamp is generated locally, never copied from firmware payload.
+        message = json.dumps({
+            "source": event.source, "channel_id": event.channel,
+            "reason": event.reason,
+        }, ensure_ascii=False, sort_keys=True)
+        with self.conn:
+            cursor = self.conn.execute(
+                "INSERT INTO events(device_id,site_id,severity,event_type,message,created_at) VALUES(?,?,?,?,?,?)",
+                (device_id, device["site_id"], "info", event.kind, message, utcnow()),
+            )
+        return cursor.lastrowid
+
     def list_events(self, limit=250):
         return list(
             self.conn.execute(
