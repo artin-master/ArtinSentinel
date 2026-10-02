@@ -158,3 +158,63 @@ def test_subscription_and_get_reject_active_payloads_even_with_allowed_id():
     for code,payload in [(1500,{'Name':'OPNetAlarm','SessionID':'0x0'}), (1042,{'Name':'Detect','SessionID':'0x0','Enable':True}), (1042,{'Name':'OPMachine','SessionID':'0x0'})]:
         with pytest.raises(EventProtocolError,match='command_not_allowed'):
             session.send_only(code,payload)
+
+
+def test_real_worker_thread_cancel_unblocks_receiver_and_drops_late_event():
+    from collections import deque
+    from threading import Event
+    entered, released = Event(), Event()
+    class Session:
+        session = 1
+        pending = deque()
+        def login(self): return {'Ret':100}
+        def subscribe(self): return 'yes'
+        def read_detection_summary(self): return ()
+        def receive(self,deadline):
+            entered.set()
+            assert released.wait(2)
+            return 1504,1,{'AlarmInfo':{'Event':'VideoMotion','Status':'Start','Channel':0}}
+        def close(self): released.set()
+    worker = EventWorker('192.0.2.1','','',session_factory=lambda *a,**kw:Session())
+    try:
+        worker.start()
+        assert entered.wait(2)
+        worker.stop()
+        worker.stop()
+        assert worker.wait(2)
+        assert worker.events.empty()
+        assert not worker.snapshot().active
+    finally:
+        worker.stop()
+        worker.wait(2)
+
+
+def test_authentication_refusal_never_retries_or_exposes_text():
+    worker = EventWorker('192.0.2.1','admin','secret')
+    class Session:
+        def login(self): raise EventProtocolError('authentication_refused')
+        def close(self): pass
+    worker._factory = lambda *a,**kw:Session()
+    worker._stop.wait = lambda delay: pytest.fail('credentials require operator correction')
+    worker._run()
+    assert worker.snapshot().state == 'refused'
+    assert worker.snapshot().error_code == 'authentication_refused'
+    assert worker.snapshot().support == 'unknown'
+
+
+def test_wire_commands_for_full_probe_are_only_login_subscription_get_and_keepalive():
+    replies = [packet({'Ret':100,'SessionID':'0x1'},1001), packet({'Ret':100},1501)]
+    replies.extend(packet({'Ret':605},1043) for _ in range(4))
+    replies.append(packet({'Ret':100},1007))
+    sock = Socket(replies)
+    sent = []
+    sock.sendall = lambda raw:sent.append((_HEADER.unpack(raw[:_HEADER.size])[4],json.loads(raw[_HEADER.size:].rstrip(b'\n\x00'))))
+    session = EventSession('192.0.2.1','admin','secret')
+    session.sock = sock
+    session.login()
+    assert session.subscribe() == 'yes'
+    assert session.read_detection_summary() == ()
+    session._send_json(1006,{'Name':'KeepAlive','SessionID':'0x00000001'})
+    assert [code for code,payload in sent] == [1000,1500,1042,1042,1042,1042,1006]
+    assert all('OPNetAlarm' not in repr(payload) and 'ConfigSet' not in repr(payload) for code,payload in sent)
+    assert 'secret' not in repr(sent)
