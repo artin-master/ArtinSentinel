@@ -21,7 +21,9 @@ físicos destas alterações.
   não mantém o tile preso indefinidamente. Outras plataformas conservam o
   caminho anterior de leitura/timeout do decoder.
 - A escuta continua única por janela e independente do decoder de vídeo.
-  Trocar Main/Sub conserva a preferência de escuta. Após uma perda do player
+  Trocar Main/Sub conserva a preferência de escuta. A passagem para outro player
+  aguarda a limpeza do anterior em background, inclusive ao desligar/religar;
+  fechar durante essa espera não inicia o novo player. Após uma perda do player
   que já reproduziu áudio, a recuperação usa backoff 2/5/10/30 s; cinco segundos
   de reprodução sustentada reiniciam esse backoff. Stop cancela a recuperação.
 - Faixa ausente, mídia não confirmada, decoder ausente e autenticação têm estados
@@ -56,8 +58,8 @@ Regressões novas em:
 Cobrem callbacks tardios, troca de canal/grade, maximizar/restaurar/fechar,
 fechamento durante conexão/retry/captura, Stop repetido, cancelamento de volume,
 backoff, encerramento da aplicação e processos filhos reais sem equipamento.
-Resultado final: **659 coletados, 659 aprovados, 0 falhas, 0 erros e 0 skipped**.
-São 65 regressões novas. Os 594 testes anteriores são preservados sem alteração.
+Resultado final: **663 coletados, 663 aprovados, 0 falhas, 0 erros e 0 skipped**.
+São 69 regressões novas. Os 594 testes anteriores são preservados sem alteração.
 A suíte completa foi executada com Qt offscreen, dados isolados em `/tmp` e
 permissão para os servidores HTTP/TLS loopback dos testes existentes.
 
@@ -68,8 +70,9 @@ de codec/faixa, aceitação de bytes e limpeza dos objetos não provam áudio au
 estabilidade contínua ou parada mecânica. Uma chamada bloqueada dentro do NetSDK
 não pode ser abortada à força com segurança; seu retorno e o Stop/logout real
 precisam ser observados com o runtime e firmware disponíveis. A espera de shutdown
-é limitada a quatro segundos no total, e não declara que qualquer chamada nativa
-retorna nesse prazo. Não se inventou watchdog/timeout proprietário de DVRIP.
+pelos workers usa um orçamento compartilhado de quatro segundos, além da
+limpeza dos processos filhos, e não declara que qualquer chamada nativa retorna
+nesse prazo. Não se inventou watchdog/timeout proprietário de DVRIP.
 
 **Hikvision permanece pendente de validação física específica por falta de
 equipamento**, inclusive para as alterações deste ciclo. Não se declara
