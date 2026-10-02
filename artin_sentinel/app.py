@@ -77,6 +77,7 @@ from .ip_camera import scan_direct_camera_streams, DirectCameraScanResult
 from .credential_store import CredentialStore
 from .app_auth import AppAuth
 from .media_process import wait_media_sessions, media_session_chain
+from .camera_event_ui import CameraEventUi, history_message
 from .live import (
     LiveStreamSession, LiveAudioSession, create_live_stream_session,
     local_media_status, ordered_audio_urls, live_session_can_pause_reconnect,
@@ -887,6 +888,10 @@ class VideoTile(QFrame):
         self.header = QLabel(f"Janela {index + 1}")
         self.header.setObjectName("TileHeader")
         self.header.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.camera_event_badge = QLabel("")
+        self.camera_event_badge.setStyleSheet("color:#ffc36b;font-size:10px;padding:0 4px")
+        self.camera_event_badge.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.camera_event_badge.hide()
         self.stream_badge = QLabel("")
         self.stream_badge.setToolTip("Stream efetivamente em uso")
         self.stream_badge.setAttribute(Qt.WA_TransparentForMouseEvents, True)
@@ -916,6 +921,7 @@ class VideoTile(QFrame):
         self.close_button.hide()
         self.close_button.clicked.connect(lambda: self.closeRequested.emit(self))
         header_layout.addWidget(self.header, 1)
+        header_layout.addWidget(self.camera_event_badge, 0, Qt.AlignRight | Qt.AlignVCenter)
         header_layout.addWidget(self.stream_badge, 0, Qt.AlignRight | Qt.AlignVCenter)
         header_layout.addWidget(self.audio_button, 0, Qt.AlignRight | Qt.AlignVCenter)
         header_layout.addWidget(self.talk_button, 0, Qt.AlignRight | Qt.AlignVCenter)
@@ -968,6 +974,10 @@ class VideoTile(QFrame):
             return
         super().mouseDoubleClickEvent(event)
 
+    def set_camera_event_badge(self, text):
+        self.camera_event_badge.setText(text)
+        self.camera_event_badge.setVisible(bool(text) and bool(self.source))
+
     def set_selected(self, selected: bool):
         self.setProperty("selected", selected)
         self.style().unpolish(self)
@@ -976,6 +986,7 @@ class VideoTile(QFrame):
 
     def clear_source(self):
         self.source = None
+        self.set_camera_event_badge("")
         self.body.reset_zoom()
         self.header.setText(f"Janela {self.index + 1}")
         self.body.clear()
@@ -998,6 +1009,7 @@ class VideoTile(QFrame):
 
     def set_source(self, title: str, subtitle: str, footer: str, payload=None):
         self.source = payload
+        self.set_camera_event_badge("")
         self.body.reset_zoom()
         self.header.setText(title)
         self.body.clear()
@@ -1033,6 +1045,7 @@ class VideoTile(QFrame):
         }
 
     def _apply_content_snapshot(self, state):
+        self.set_camera_event_badge("")
         self.source = state.get("source")
         self.body.clear(); self.body.setPixmap(QPixmap())
         if not self.source:
@@ -1758,7 +1771,7 @@ class PlaybackScreen(ZoomImageLabel):
     pass
 
 
-class MainWindow(QMainWindow):
+class MainWindow(QMainWindow, CameraEventUi):
     PAGE_LIVE = 0
     PAGE_PLAYBACK = 1
     PAGE_EVENTS = 2
@@ -2313,6 +2326,10 @@ class MainWindow(QMainWindow):
         self.inspector_menu_btn.setMenu(self.inspector_menu)
         selection_card_layout.addWidget(self.inspector_menu_btn, 0, Qt.AlignTop)
         ins.addWidget(self.selection_card)
+        self.camera_event_status = QLabel("Eventos locais: sonda desligada")
+        self.camera_event_status.setWordWrap(True)
+        self.camera_event_status.setMinimumWidth(0)
+        ins.addWidget(self.camera_event_status)
         self._set_live_selection_summary("Nenhuma fonte selecionada", "Selecione uma câmera ou canal.", "", "SP_ComputerIcon")
 
         # Stream: one compact row + active badge. Rare actions move to a menu.
@@ -3334,6 +3351,7 @@ class MainWindow(QMainWindow):
     def poll_live_streams(self):
         if getattr(self, "_closing_app", False):
             return
+        self.poll_camera_events()
         for tile in list(self.video_tiles):
             session = self.live_sessions.get(tile.index)
             if session is None:
@@ -7514,7 +7532,7 @@ class MainWindow(QMainWindow):
         events = self.db.list_events()
         self.event_table.setRowCount(len(events))
         for row, event in enumerate(events):
-            values = (event["created_at"], event["severity"], event["event_type"], event["device_name"] or "—", event["message"])
+            values = (event["created_at"], event["severity"], event["event_type"], event["device_name"] or "—", history_message(event))
             for col, value in enumerate(values):
                 self.event_table.setItem(row, col, QTableWidgetItem(str(value)))
         if events:
@@ -9877,6 +9895,7 @@ class MainWindow(QMainWindow):
             shutdown_sessions.extend([window.audio_session, getattr(window, "_previous_audio_session", None)])
         shutdown_sessions = media_session_chain(shutdown_sessions)
         self._closing_app = True
+        self.stop_camera_events()
         self.save_live_workspace()
         if self.manual_recording is not None:
             self.manual_recording.stop()
