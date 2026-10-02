@@ -6067,10 +6067,10 @@ class MainWindow(QMainWindow):
             primary.addWidget(button)
         primary.addWidget(more)
         primary.addStretch()
-        layout.addLayout(primary)
 
         # Discovery, evidence and enrollment share this single device manager.
         device_sections = QSplitter(Qt.Vertical)
+        device_sections.setObjectName("equipmentSectionsSplitter")
         found = QFrame()
         found.setObjectName("SourcePane")
         found_layout = QVBoxLayout(found)
@@ -6087,12 +6087,19 @@ class MainWindow(QMainWindow):
         self.devices_add_found_btn.setObjectName("CompactAction")
         self.devices_add_found_btn.setEnabled(False)
         self.devices_add_found_btn.clicked.connect(self.add_found_from_devices)
-        self.devices_found_channels_btn = QPushButton("Canais")
+        found_more = QToolButton()
+        found_more.setObjectName("ActionMenu")
+        found_more.setText("Mais ▾")
+        found_more.setPopupMode(QToolButton.InstantPopup)
+        found_menu = QMenu(found_more)
+        self.devices_found_channels_btn = found_menu.addAction("Canais")
         self.devices_found_channels_btn.setEnabled(False)
-        self.devices_found_channels_btn.clicked.connect(lambda: self.act_on_found_device(self.read_device_channels_or_stream))
-        self.devices_found_delete_btn = QPushButton("Excluir")
+        self.devices_found_channels_btn.triggered.connect(lambda: self.act_on_found_device(self.read_device_channels_or_stream))
+        self.devices_found_delete_btn = found_menu.addAction("Excluir")
         self.devices_found_delete_btn.setEnabled(False)
-        self.devices_found_delete_btn.clicked.connect(lambda: self.act_on_found_device(self.delete_selected_device))
+        self.devices_found_delete_btn.triggered.connect(lambda: self.act_on_found_device(self.delete_selected_device))
+        found_more.setMenu(found_menu)
+        self._discovery_more_menu = found_menu
         self.devices_web_found_btn = QPushButton("Web do encontrado")
         self.devices_web_found_btn.setObjectName("CompactAction")
         self.devices_web_found_btn.setToolTip("Abrir a página de configuração detectada no navegador padrão")
@@ -6106,9 +6113,10 @@ class MainWindow(QMainWindow):
         found_header.addWidget(self.devices_found_status, 1)
         found_layout.addLayout(found_header)
         found_actions = QHBoxLayout()
-        for button in (self.devices_find_btn, self.devices_add_found_btn, self.devices_found_channels_btn,
-                       self.devices_found_delete_btn, self.devices_web_found_btn, self.devices_report_found_btn):
+        for button in (self.devices_find_btn, self.devices_add_found_btn,
+                       self.devices_web_found_btn, self.devices_report_found_btn):
             found_actions.addWidget(button)
+        found_actions.addWidget(found_more)
         found_actions.addStretch()
         found_layout.addLayout(found_actions)
         self.devices_found_table = QTableWidget(0, 6)
@@ -6142,8 +6150,6 @@ class MainWindow(QMainWindow):
         found_layout.addWidget(details_button, 0, Qt.AlignLeft)
         found_layout.addWidget(self.devices_discovery_log)
         found.setMinimumHeight(400)
-        device_sections.addWidget(found)
-
         device_splitter = QSplitter(Qt.Horizontal)
 
         inventory = QFrame()
@@ -6157,6 +6163,7 @@ class MainWindow(QMainWindow):
         self.device_inventory_count = QLabel("0 cadastrados • 0 online")
         self.device_inventory_count.setStyleSheet("color:#98b3bc")
         inv.addWidget(self.device_inventory_count)
+        inv.addLayout(primary)
         self.device_filter = QLineEdit()
         self.device_filter.setPlaceholderText("Filtrar por nome, IP, fabricante ou modelo…")
         self.device_filter.textChanged.connect(self.refresh_device_filter)
@@ -6244,9 +6251,10 @@ class MainWindow(QMainWindow):
         device_splitter.setStretchFactor(1, 2)
         device_splitter.setSizes([780, 420])
         device_sections.addWidget(device_splitter)
+        device_sections.addWidget(found)
         device_sections.setStretchFactor(0, 3)
         device_sections.setStretchFactor(1, 2)
-        device_sections.setSizes([440, 320])
+        device_sections.setSizes([460, 400])
         device_sections.setMinimumHeight(740)
         layout.addWidget(device_sections, 1)
         self.build_equipment_log_panel(layout)
