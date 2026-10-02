@@ -136,6 +136,9 @@ class MediaProbeResult:
     audio_sample_rate: int = 0
     audio_channels: int = 0
     detail: str = ""
+    error_code: str = ""
+    video_present: bool | None = None
+    audio_present: bool | None = None
 
     @property
     def has_audio(self) -> bool:
@@ -235,6 +238,23 @@ def local_media_status() -> dict[str, object]:
     }
 
 
+def classify_media_probe_error(error: str) -> tuple[str, str]:
+    """Map FFmpeg errors to controlled labels; never return external text/URLs."""
+    text = str(error or "").casefold()
+    groups = (
+        ("authentication", "Autenticação rejeitada ou necessária", ("401", "403", "unauthorized", "forbidden", "authentication failed")),
+        ("codec_unsupported", "Codec não suportado pelo decoder local", ("unknown decoder", "decoder not found", "unsupported codec", "no decoder")),
+        ("stream_not_found", "Stream não encontrado", ("404", "not found", "454", "session not found")),
+        ("timeout", "Tempo limite na verificação do stream", ("timed out", "timeout")),
+        ("rtsp_unavailable", "RTSP/rede indisponível", ("connection refused", "connection reset", "no route to host", "network is unreachable", "503", "service unavailable")),
+        ("invalid_response", "Resposta de mídia inválida", ("invalid data found", "invalid response")),
+    )
+    for code, detail, tokens in groups:
+        if any(token in text for token in tokens):
+            return code, detail
+    return "other_error", "Não foi possível confirmar a mídia"
+
+
 def probe_rtsp_media_capabilities(
     url: str,
     username: str = "",
@@ -246,8 +266,15 @@ def probe_rtsp_media_capabilities(
     """Inspect video/audio tracks with ffprobe without persisting credentials."""
     ffprobe = shutil.which("ffprobe")
     if not ffprobe or not url:
-        return MediaProbeResult(detail="ffprobe não disponível" if not ffprobe else "URL vazia")
-    auth_url = authenticated_rtsp_url(url, username, password)
+        return MediaProbeResult(detail="ffprobe não disponível" if not ffprobe else "Rota não configurada",
+                                error_code="probe_unavailable" if not ffprobe else "stream_not_found")
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in {"rtsp", "rtsps"} or not parsed.hostname:
+            raise ValueError("Invalid RTSP route")
+        auth_url = authenticated_rtsp_url(url, username, password)
+    except (ValueError, TypeError):
+        return MediaProbeResult(detail="Rota RTSP inválida", error_code="invalid_response")
     cmd = [
         ffprobe,
         "-v", "error",
@@ -259,24 +286,32 @@ def probe_rtsp_media_capabilities(
     ]
     try:
         cp = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return MediaProbeResult(detail=f"ffprobe: {type(exc).__name__}")
+    except subprocess.TimeoutExpired:
+        return MediaProbeResult(detail="Tempo limite na verificação do stream", error_code="timeout")
+    except OSError:
+        return MediaProbeResult(detail="Não foi possível executar ffprobe", error_code="probe_unavailable")
     if cp.returncode != 0:
-        tail = sanitize_text((cp.stderr or "").strip().splitlines()[-1] if (cp.stderr or "").strip() else "")
-        return MediaProbeResult(detail=tail or f"ffprobe retornou {cp.returncode}")
+        code, detail = classify_media_probe_error(cp.stderr or "")
+        return MediaProbeResult(detail=detail, error_code=code)
     try:
         payload = json.loads(cp.stdout or "{}")
-    except json.JSONDecodeError:
-        return MediaProbeResult(detail="ffprobe retornou JSON inválido")
-    video = next((st for st in payload.get("streams", []) if st.get("codec_type") == "video"), {})
-    audio = next((st for st in payload.get("streams", []) if st.get("codec_type") == "audio"), {})
+        streams = payload.get("streams", [])
+        if not isinstance(streams, list) or not all(isinstance(st, dict) for st in streams):
+            raise ValueError("Invalid streams")
+    except (ValueError, AttributeError):
+        return MediaProbeResult(detail="ffprobe retornou resposta inválida", error_code="invalid_response")
+    video = next((st for st in streams if st.get("codec_type") == "video"), {})
+    audio = next((st for st in streams if st.get("codec_type") == "audio"), {})
     def _int(value):
         try:
             return int(value or 0)
         except (TypeError, ValueError):
             return 0
-    video_codec = str(video.get("codec_name") or "").lower()
-    audio_codec = str(audio.get("codec_name") or "").lower()
+    def _codec(value):
+        name = str(value or "").lower()
+        return name if re.fullmatch(r"[a-z0-9_]{1,64}", name) else ""
+    video_codec = _codec(video.get("codec_name"))
+    audio_codec = _codec(audio.get("codec_name"))
     parts = []
     if video_codec:
         size = f" {_int(video.get('width'))}x{_int(video.get('height'))}" if _int(video.get('width')) and _int(video.get('height')) else ""
@@ -293,6 +328,8 @@ def probe_rtsp_media_capabilities(
         audio_sample_rate=_int(audio.get("sample_rate")),
         audio_channels=_int(audio.get("channels")),
         detail=" • ".join(parts) or "nenhuma faixa reconhecida",
+        video_present=bool(video), audio_present=bool(audio),
+        error_code="" if video or audio else "stream_not_found",
     )
 
 

@@ -77,6 +77,7 @@ from .credential_store import CredentialStore
 from .app_auth import AppAuth
 from .live import LiveStreamSession, LiveAudioSession, create_live_stream_session, local_media_status, ordered_audio_urls
 from .log_viewer import sanitize_log_text, read_log_tail, filter_log_lines
+from .stream_diagnostics import diagnose_saved_streams, STATE_LABELS as STREAM_STATE_LABELS
 from .private_update_auth import store_token
 from .recording_search import search_recordings, search_recordings_multi, playback_rtsp_url
 from .hik_recording import search_hikvision_recordings, search_hikvision_recordings_multi, hikvision_playback_url
@@ -2297,6 +2298,12 @@ class MainWindow(QMainWindow):
         self.stream_label.setObjectName("InspectorSectionTitle")
         stream_title_row.addWidget(self.stream_label)
         stream_title_row.addStretch()
+        self.stream_diagnose_btn = QToolButton()
+        self.stream_diagnose_btn.setText("Main/Sub")
+        self.stream_diagnose_btn.setToolTip("Diagnosticar vídeo, áudio e codecs das rotas cadastradas")
+        self.stream_diagnose_btn.setEnabled(False)
+        self.stream_diagnose_btn.clicked.connect(self.diagnose_selected_streams)
+        stream_title_row.addWidget(self.stream_diagnose_btn)
         stream_box.addLayout(stream_title_row)
         stream_row = QHBoxLayout()
         stream_row.setSpacing(5)
@@ -2786,6 +2793,8 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "stream_active_label"):
             return
         tile = self.selected_video_tile
+        if hasattr(self, "stream_diagnose_btn"):
+            self.stream_diagnose_btn.setEnabled(bool(tile and tile.source and tile.source.get("type") == "channel"))
         active = ""
         if tile is not None and isinstance(tile.source, dict):
             active = str(tile.source.get("active_stream") or "").lower()
@@ -9441,6 +9450,10 @@ class MainWindow(QMainWindow):
             for c, value in enumerate(vals):
                 table.setItem(r, c, QTableWidgetItem(str(value)))
         layout.addWidget(table)
+        if rows:
+            media_diagnose = QPushButton("Diagnosticar mídia Main/Sub")
+            media_diagnose.clicked.connect(lambda: self.show_channel_stream_diagnostics(device, rows))
+            layout.addWidget(media_diagnose, 0, Qt.AlignLeft)
         if recorder_provider_hint(device) in ("hikvision", "jfl") and rows:
             diagnose = QPushButton("Diagnosticar Main/Sub")
             diagnose.setToolTip("Testar as duas rotas RTSP de cada canal sem alterar o gravador")
@@ -9454,6 +9467,68 @@ class MainWindow(QMainWindow):
         self._transient_dialogs.append(dialog)
         dialog.finished.connect(lambda _=0, d=dialog: self._release_transient_dialog(d))
         dialog.open()
+
+    def diagnose_selected_streams(self):
+        tile = self.selected_video_tile
+        if not tile or not tile.source or tile.source.get("type") != "channel":
+            return
+        device = self.db.get_device(int(tile.source["device_id"]))
+        channel = self.db.get_recorder_channel(int(tile.source["channel_id"]))
+        if device and channel and int(channel["device_id"]) == int(device["id"]):
+            self.show_channel_stream_diagnostics(device, [channel])
+
+    def show_channel_stream_diagnostics(self, device, rows):
+        credentials = self._credentials_for_device(int(device["id"])) or ("", "")
+        # Saved rows/credentials are captured before starting the worker. Changing
+        # Site or selection never rebinds this diagnostic or writes its results.
+        channels = [dict(row) for row in rows]
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Diagnóstico Main/Sub — {device['name']}")
+        dialog.resize(880, 520)
+        layout = QVBoxLayout(dialog)
+        status = QLabel("Verificando as rotas cadastradas; sem alterar o equipamento…")
+        status.setWordWrap(True)
+        layout.addWidget(status)
+        table = QTableWidget(0, 4)
+        table.setObjectName("streamDiagnosticsTable")
+        table.setHorizontalHeaderLabels(["Canal", "Stream", "Resultado", "Vídeo / áudio / codecs"])
+        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
+        layout.addWidget(table)
+        cancel_event = Event()
+        completed = [False]
+        report_lines = []
+        copy = QPushButton("Copiar diagnóstico")
+        copy.setEnabled(False)
+        copy.clicked.connect(lambda: QApplication.clipboard().setText("\n".join(report_lines)))
+        layout.addWidget(copy, 0, Qt.AlignLeft)
+        close = QPushButton("Cancelar teste")
+        close.clicked.connect(lambda: dialog.accept() if completed[0] else cancel_event.set())
+        layout.addWidget(close, 0, Qt.AlignRight)
+        worker = Worker(diagnose_saved_streams, channels, *credentials, cancel_event=cancel_event, with_progress=True)
+        worker.signals.progress.connect(status.setText)
+        def show_results(results):
+            if not dialog.isVisible():
+                return
+            table.setRowCount(len(results))
+            report_lines.clear()
+            for index, result in enumerate(results):
+                values = (result.channel_no, result.stream, STREAM_STATE_LABELS.get(result.state, "Inconclusivo"), result.summary())
+                report_lines.append(" • ".join(str(value) for value in values))
+                for col, value in enumerate(values):
+                    table.setItem(index, col, QTableWidgetItem(str(value)))
+            copy.setEnabled(bool(results))
+            status.setText(f"{len(results)} rota(s) verificada(s)" + (" • cancelado" if cancel_event.is_set() else ""))
+        worker.signals.result.connect(show_results)
+        worker.signals.error.connect(lambda _error: status.setText("Falha na verificação de mídia; sem alterar o cadastro."))
+        worker.signals.finished.connect(lambda: completed.__setitem__(0, True))
+        worker.signals.finished.connect(lambda: close.setText("Fechar") if dialog.isVisible() else None)
+        dialog.finished.connect(lambda _result: cancel_event.set())
+        self._transient_dialogs.append(dialog)
+        dialog.finished.connect(lambda _=0: self._release_transient_dialog(dialog) if completed[0] else None)
+        worker.signals.finished.connect(lambda: self._release_transient_dialog(dialog) if not dialog.isVisible() else None)
+        dialog.open()
+        self.start_qt_worker(worker)
 
     def diagnose_hikvision_channel_routes(self, device, rows):
         credentials = self._credentials_for_device(int(device["id"]))
