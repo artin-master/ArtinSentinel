@@ -498,6 +498,7 @@ class LiveAudioSession:
         audio_sample_rate: int = 0,
         playback: bool = False,
         playback_speed: float = 1.0,
+        previous_session: LiveAudioSession | None = None,
     ):
         if isinstance(url, (list, tuple)):
             self.urls = [str(item) for item in url if item]
@@ -514,6 +515,7 @@ class LiveAudioSession:
         self.playback_speed = float(playback_speed) if playback else 1.0
         if self.playback_speed not in (0.5, 1.0, 2.0, 4.0, 8.0, 16.0):
             raise ValueError("Velocidade de áudio inválida")
+        self._previous_session = previous_session
         self.status: queue.Queue[str] = queue.Queue(maxsize=8)
         self.diagnostics: queue.Queue[str] = queue.Queue(maxsize=24)
         self._process: subprocess.Popen | None = None
@@ -787,6 +789,11 @@ class LiveAudioSession:
     def _run_wrapper(self) -> None:
         failures = 0
         try:
+            previous = self._previous_session
+            while previous is not None and not self._stop.is_set():
+                if previous.wait_closed(0.1):
+                    break
+            self._previous_session = None
             while not self._stop.is_set():
                 self._last_player_duration = 0.0
                 self._run()
@@ -806,6 +813,7 @@ class LiveAudioSession:
                 self._push(self.diagnostics, f"Player interrompido: {type(exc).__name__}")
         finally:
             self._stop.set()
+            self._previous_session = None
             terminate_media_process(self._process)
             self._process = None
             self._finished.set()

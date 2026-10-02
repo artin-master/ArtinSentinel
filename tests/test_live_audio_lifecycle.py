@@ -130,3 +130,50 @@ def test_audio_current_state_exposes_specific_operational_label(state, label):
     session = live.LiveAudioSession('rtsp://camera/main')
     session._set_state(state)
     assert session.current_state_text() == label
+
+
+def test_audio_handoff_waits_for_previous_player_before_starting_new_worker(monkeypatch):
+    released = threading.Event()
+    waiting = threading.Event()
+    played = threading.Event()
+    def previous_wait(timeout):
+        waiting.set()
+        return released.wait(timeout)
+    previous = Mock()
+    previous.wait_closed.side_effect = previous_wait
+    session = live.LiveAudioSession('rtsp://camera/main', previous_session=previous)
+    def play():
+        assert released.is_set()
+        played.set()
+    monkeypatch.setattr(session, '_run', play)
+    try:
+        session.start()
+        assert waiting.wait(1)
+        assert not played.is_set() and session._process is None
+        released.set()
+        assert session.wait_closed(1)
+        assert played.is_set()
+        assert session._previous_session is None
+    finally:
+        session.stop()
+        released.set()
+        session.wait_closed(1)
+
+
+def test_close_during_audio_handoff_never_starts_new_player(monkeypatch):
+    waiting = threading.Event()
+    previous = Mock()
+    def previous_wait(timeout):
+        waiting.set()
+        threading.Event().wait(timeout)
+        return False
+    previous.wait_closed.side_effect = previous_wait
+    session = live.LiveAudioSession('rtsp://camera/main', previous_session=previous)
+    play = Mock()
+    monkeypatch.setattr(session, '_run', play)
+    session.start()
+    assert waiting.wait(1)
+    session.stop()
+    assert session.wait_closed(1)
+    play.assert_not_called()
+    assert session._previous_session is None

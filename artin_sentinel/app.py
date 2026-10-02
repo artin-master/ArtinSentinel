@@ -1552,9 +1552,10 @@ class DetachedMonitorWindow(QMainWindow):
         creds=self.controller._credentials_for_device(int(dev["id"]))
         if not creds:
             tile.set_audio_active(False); return
+        previous_audio = self.audio_session
         self.stop_audio(); user,pwd=creds
         self.audio_session=LiveAudioSession(
-            urls, user, pwd, volume=self.audio_volume,
+            urls, user, pwd, volume=self.audio_volume, previous_session=previous_audio,
             audio_confirmed=bool(info.get("can_listen")),
             audio_codec=str(ch["audio_codec"] or ""),
             audio_sample_rate=int(ch["audio_sample_rate"] or 0),
@@ -4253,10 +4254,11 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Áudio", "Configure a credencial do equipamento antes de abrir o áudio.")
             tile.set_audio_active(False)
             return
+        previous_audio = self.live_audio_session
         self.stop_live_audio()
         username, password = credentials
         session = LiveAudioSession(
-            urls, username, password, volume=self.live_audio_volume,
+            urls, username, password, volume=self.live_audio_volume, previous_session=previous_audio,
             audio_confirmed=bool(info.get("can_listen")),
             audio_codec=str(channel["audio_codec"] or ""),
             audio_sample_rate=int(channel["audio_sample_rate"] or 0),
