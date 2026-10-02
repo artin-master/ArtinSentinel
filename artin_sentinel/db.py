@@ -1397,6 +1397,30 @@ class Database:
                               (json.dumps(metadata, ensure_ascii=False), utcnow(), device_id))
         return states
 
+    def confirm_native_channel_frame(self, channel_id):
+        """Promote only the saved native lens that actually delivered a frame."""
+        from .direct_revalidation import recoverable_native_channel
+        row = self.get_recorder_channel(channel_id)
+        if row is None:
+            return False
+        device = self.get_device(row["device_id"])
+        if device is None or not recoverable_native_channel(device, row):
+            return False
+        try:
+            metadata = json.loads(device["metadata_json"] or "{}")
+        except (TypeError, ValueError):
+            metadata = {}
+        metadata = metadata if isinstance(metadata, dict) else {}
+        states = metadata.get("direct_channel_revalidation", {})
+        states = states if isinstance(states, dict) else {}
+        metadata["direct_channel_revalidation"] = states
+        states[str(row["channel_no"])] = {"state": "validated", "checked_at": utcnow(), "reason": "native_live_frame"}
+        with self.conn:
+            self.conn.execute("UPDATE recorder_channels SET available=1,updated_at=? WHERE id=?", (utcnow(), channel_id))
+            self.conn.execute("UPDATE devices SET metadata_json=?,updated_at=? WHERE id=?",
+                              (json.dumps(metadata, ensure_ascii=False), utcnow(), row["device_id"]))
+        return True
+
     def invalidate_direct_camera_channels(self, device_id: int):
         """Mark stale direct-camera streams unavailable after a failed revalidation."""
         self.conn.execute(

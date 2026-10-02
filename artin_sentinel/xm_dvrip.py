@@ -15,6 +15,7 @@ import struct
 import shutil
 import subprocess
 import time
+from urllib.parse import urlparse, parse_qs
 
 
 _HEADER = struct.Struct("<BB2xII2xHI")
@@ -31,10 +32,23 @@ def sofia_hash(password: str) -> str:
     return "".join(chars[(digest[i] + digest[i + 1]) % 62] for i in range(0, 16, 2))
 
 
-def _recv_exact(sock: socket.socket, size: int) -> bytes:
+def _recv_exact(sock: socket.socket, size: int, *, deadline=0.0, cancel_event=None) -> bytes:
     data = bytearray()
     while len(data) < size:
-        part = sock.recv(size - len(data))
+        if cancel_event is not None and cancel_event.is_set():
+            raise DvripError("Teste DVRIP cancelado")
+        if deadline:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("Tempo limite DVRIP")
+            sock.settimeout(min(0.5 if cancel_event is not None else 2.5, remaining))
+        try:
+            part = sock.recv(size - len(data))
+        except socket.timeout:
+            # Poll cancellation without losing an already received partial packet.
+            if cancel_event is not None and deadline and time.monotonic() < deadline:
+                continue
+            raise
         if not part:
             raise DvripError("conexão DVRIP encerrada pelo equipamento")
         data.extend(part)
@@ -52,6 +66,8 @@ class DvripSession:
     session: int = 0
     sequence: int = 0
     media_buffer: bytes = b""
+    media_deadline: float = 0.0
+    media_cancel: object = None
 
     def connect(self) -> None:
         if self.sock is not None:
@@ -88,8 +104,12 @@ class DvripSession:
                 pass
 
     def __enter__(self) -> "DvripSession":
-        self.connect()
-        self.login()
+        try:
+            self.connect()
+            self.login()
+        except Exception:
+            self.close()
+            raise
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
@@ -183,11 +203,11 @@ class DvripSession:
         if self.sock is None:
             raise DvripError("sessão DVRIP não conectada")
         try:
-            header = _recv_exact(self.sock, _HEADER.size)
+            header = _recv_exact(self.sock, _HEADER.size, deadline=self.media_deadline, cancel_event=self.media_cancel)
             magic, _version, session, _seq, response_id, length = _HEADER.unpack(header)
             if magic != 0xFF:
                 raise DvripError("chunk DVRIP inválido")
-            body = _recv_exact(self.sock, int(length)) if length else b""
+            body = _recv_exact(self.sock, int(length), deadline=self.media_deadline, cancel_event=self.media_cancel) if length else b""
         except (OSError, socket.timeout) as exc:
             raise DvripError(f"falha ao receber mídia DVRIP: {exc}") from exc
         self.session = int(session or self.session)
@@ -392,42 +412,92 @@ class DvripSession:
         )
 
 
+def parse_dvrip_route(url: str) -> tuple[str, int, int, int]:
+    """Keep the native index independent of the Sentinel display number."""
+    parsed = urlparse(url)
+    query = parse_qs(parsed.query, keep_blank_values=True)
+    if parsed.scheme.lower() != "dvrip" or not parsed.hostname or parsed.username is not None or parsed.password is not None:
+        raise ValueError("Rota DVRIP inválida")
+    channel = int(query.get("channel", ["0"])[0])
+    subtype = int(query.get("subtype", ["0"])[0])
+    port = parsed.port if parsed.port is not None else 34567
+    if channel < 0 or subtype not in (0, 1) or not 1 <= port <= 65535:
+        raise ValueError("Índice DVRIP inválido")
+    if any(len(query[key]) != 1 for key in ("channel", "subtype") if key in query):
+        raise ValueError("Índice DVRIP ambíguo")
+    return parsed.hostname, port, channel, subtype
+
+
+def dvrip_error_code(error: Exception) -> str:
+    """Return controlled classifications; never export an exception payload."""
+    cause = error
+    while cause is not None:
+        if isinstance(cause, (TimeoutError, socket.timeout)):
+            return "timeout"
+        cause = cause.__cause__
+    text = str(error).casefold()
+    if "credencial" in text or "acesso dvrip negado" in text:
+        return "authentication"
+    if "não suportado" in text:
+        return "protocol_unsupported"
+    # A rejected Claim alone does not prove a channel is absent on this firmware.
+    if "canal inexistente" in text:
+        return "stream_not_found"
+    return "media_unverified"
+
+
 @dataclass(slots=True)
 class DvripMediaProbe:
     ok: bool
     codec: str = ""
     fps: int = 0
     detail: str = ""
+    error_code: str = ""
 
 
 def probe_dvrip_media(
-    host: str, username: str, password: str, *, channel: int = 0, subtype: int = 0, timeout: float = 4.0
+    host: str, username: str, password: str, *, channel: int = 0, subtype: int = 0, timeout: float = 4.0,
+    port: int = 34567, cancel_event=None
 ) -> DvripMediaProbe:
     """Bounded read-only OPMonitor probe used for native multi-lens discovery."""
-    deadline = __import__("time").monotonic() + max(1.0, float(timeout))
+    if cancel_event is not None and cancel_event.is_set():
+        return DvripMediaProbe(False, detail="Teste DVRIP cancelado", error_code="cancelled")
+    deadline = time.monotonic() + max(0.05, float(timeout))
     try:
-        with DvripSession(host, username, password, timeout=min(2.5, float(timeout))) as session:
+        with DvripSession(host, username, password, port=port, timeout=min(2.5, max(0.05, float(timeout)))) as session:
+            session.media_deadline = deadline
+            session.media_cancel = cancel_event
             session.monitor_claim(channel, subtype)
             session.monitor_start(channel, subtype)
-            while __import__("time").monotonic() < deadline:
+            while time.monotonic() < deadline:
+                if cancel_event is not None and cancel_event.is_set():
+                    return DvripMediaProbe(False, detail="Teste DVRIP cancelado", error_code="cancelled")
+                if session.sock is not None:
+                    session.sock.settimeout(max(0.01, min(session.timeout, deadline - time.monotonic())))
                 ptype, packet = session.read_media_packet()
                 if ptype not in (0xFC, 0xFE, 0xFD):
                     continue
                 if ptype == 0xFD:
                     # Wait for a keyframe so codec/fps metadata is available.
                     continue
-                media_code = int(packet[4]) if len(packet) > 5 else 0
+                if len(packet) <= 16 or packet[:4] != bytes((0, 0, 1, ptype)):
+                    return DvripMediaProbe(False, detail="Pacote de vídeo DVRIP inválido", error_code="invalid_response")
+                media_code = int(packet[4])
                 fps = int(packet[5]) if len(packet) > 5 else 0
                 if media_code in (0x02, 0x12):
                     codec = "h264"
                 elif media_code in (0x03, 0x13, 0x43, 0x53):
                     codec = "hevc"
                 else:
-                    return DvripMediaProbe(False, detail=f"codec DVRIP não suportado: 0x{media_code:02x}")
+                    return DvripMediaProbe(False, detail="Codec DVRIP não suportado", error_code="protocol_unsupported")
                 return DvripMediaProbe(True, codec=codec, fps=fps, detail=f"DVRIP canal {channel} {codec.upper()} {fps or '?'} fps")
-    except DvripError as exc:
-        return DvripMediaProbe(False, detail=str(exc))
-    return DvripMediaProbe(False, detail=f"DVRIP canal {channel} sem vídeo no limite de tempo")
+    except (DvripError, OSError) as exc:
+        code = "cancelled" if cancel_event is not None and cancel_event.is_set() else dvrip_error_code(exc)
+        labels = {"timeout": "Tempo limite na leitura DVRIP", "authentication": "Credencial DVRIP recusada",
+                  "protocol_unsupported": "Protocolo DVRIP não suportado", "stream_not_found": "Canal DVRIP inexistente",
+                  "cancelled": "Teste DVRIP cancelado", "media_unverified": "Mídia DVRIP inconclusiva"}
+        return DvripMediaProbe(False, detail=labels[code], error_code=code)
+    return DvripMediaProbe(False, detail=f"DVRIP canal {channel} sem vídeo no limite de tempo", error_code="timeout")
 
 
 def dvrip_frame_signature(host: str, username: str, password: str, *, channel: int = 0,

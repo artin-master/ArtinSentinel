@@ -74,7 +74,8 @@ from .paths import data_dir
 from .services import discover_network_devices, diagnose, diagnose_endpoints, persist_discovered_web_checks
 from .recorder import scan_intelbras_channels, scan_hikvision_channels, diagnose_hikvision_routes, hikvision_compatibility_report, channels_for_live_view
 from .ip_camera import scan_direct_camera_streams, DirectCameraScanResult
-from .direct_revalidation import previously_confirmed, diagnostic_line
+from .live import DvripLiveStreamSession
+from .direct_revalidation import previously_confirmed, diagnostic_line, recoverable_native_channel
 from .credential_store import CredentialStore
 from .app_auth import AppAuth
 from .media_process import wait_media_sessions, media_session_chain
@@ -1413,7 +1414,7 @@ class DetachedMonitorWindow(QMainWindow):
         dev=self.db.get_device(int(source.get("device_id",0))); ch=self.db.get_recorder_channel(int(source.get("channel_id",0)))
         if not dev or not ch: tile.set_source("Canal","Fonte não encontrada","Atualize a janela",source); return
         title=self.db.channel_display_name(ch); route_kind=(ch["route_kind"] if "route_kind" in ch.keys() else "via_recorder")
-        if not bool(ch["available"]) and (route_kind == "direct" or resolve_operational_identity(dev).kind == "nvr"):
+        if not bool(ch["available"]) and not recoverable_native_channel(dev, ch) and (route_kind == "direct" or resolve_operational_identity(dev).kind == "nvr"):
             tile.set_source(title, "Vídeo ainda não confirmado", "Consulte Canais / Stream e a coluna Evidência", source)
             return
         mode,url,fmode,furl=self._stream_choice(ch,source.get("forced_stream")); src=dict(source); src.update({"type":"channel","title":title,"active_stream":mode})
@@ -1486,6 +1487,7 @@ class DetachedMonitorWindow(QMainWindow):
         all_channels = self.db.list_recorder_channels(int(device_id))
         identity = resolve_operational_identity(dev)
         channels = channels_for_live_view(all_channels, identity.kind)
+        channels += [ch for ch in all_channels if ch not in channels and not bool(ch["available"]) and recoverable_native_channel(dev, ch)]
         if not channels:
             if all_channels and identity.kind == "nvr":
                 self.status.setText("NVR sem vídeo confirmado • consulte Canais / Stream na janela principal")
@@ -1610,6 +1612,11 @@ class DetachedMonitorWindow(QMainWindow):
             frame=sess.latest_frame()
             if frame is not None:
                 img=QImage(frame.pixels,frame.width,frame.height,frame.width*3,QImage.Format_RGB888).copy(); tile.set_frame(img)
+                if tile.source and isinstance(sess, DvripLiveStreamSession) and not getattr(sess, "_inventory_frame_confirmed", False):
+                    try:
+                        sess._inventory_frame_confirmed = self.db.confirm_native_channel_frame(int(tile.source.get("channel_id",0)))
+                    except Exception:
+                        pass
                 if tile.source and not tile.source.get("_last_good_saved"):
                     active_kind = "main" if sess.active_profile.lower().startswith("main") else "sub"
                     try:
@@ -3148,6 +3155,7 @@ class MainWindow(QMainWindow, CameraEventUi):
         all_channels = self.db.list_recorder_channels(int(device_id))
         identity = resolve_operational_identity(device)
         channels = channels_for_live_view(all_channels, identity.kind)
+        channels += [ch for ch in all_channels if ch not in channels and not bool(ch["available"]) and recoverable_native_channel(device, ch)]
         if not channels:
             if all_channels and identity.kind == "nvr":
                 QMessageBox.information(self, "Vídeo pendente",
@@ -3273,7 +3281,7 @@ class MainWindow(QMainWindow, CameraEventUi):
             return
         display_name = self.db.channel_display_name(channel)
         route_kind = channel["route_kind"] if "route_kind" in channel.keys() else "via_recorder"
-        if not bool(channel["available"]) and (route_kind == "direct" or resolve_operational_identity(device).kind == "nvr"):
+        if not bool(channel["available"]) and not recoverable_native_channel(device, channel) and (route_kind == "direct" or resolve_operational_identity(device).kind == "nvr"):
             tile.set_source(display_name, "Vídeo ainda não confirmado", "Use Configuração → Equipamentos → Canais / Stream para consultar a evidência", source)
             return
         forced_stream = source.get("forced_stream")
@@ -3414,6 +3422,11 @@ class MainWindow(QMainWindow, CameraEventUi):
                 # Persist the last profile that actually produced a frame. The
                 # auto chooser uses this only for recorder-backed IP/proxy
                 # channels, so legacy analogue behaviour is not changed.
+                if tile.source and isinstance(session, DvripLiveStreamSession) and not getattr(session, "_inventory_frame_confirmed", False):
+                    try:
+                        session._inventory_frame_confirmed = self.db.confirm_native_channel_frame(int(tile.source.get("channel_id", 0)))
+                    except Exception:
+                        pass
                 if tile.source and not tile.source.get("_last_good_saved"):
                     active_kind = "main" if session.active_profile.lower().startswith("main") else "sub"
                     try:

@@ -11,9 +11,9 @@ import subprocess
 import threading
 import time
 from dataclasses import dataclass
-from urllib.parse import parse_qs, quote, urlparse, urlunparse
+from urllib.parse import quote, urlparse, urlunparse
 
-from .xm_dvrip import DvripSession, DvripError
+from .xm_dvrip import DvripSession, DvripError, parse_dvrip_route, dvrip_error_code
 from .media_process import terminate_media_process
 
 
@@ -1656,7 +1656,7 @@ class LiveStreamSession:
 class DvripLiveStreamSession(LiveStreamSession):
     """Decode native XM/Sofia OPMonitor video through FFmpeg.
 
-    Used only for validated ``dvrip://`` sources, primarily fixed lenses on
+    Used for confirmed or pending known ``dvrip://`` sources, primarily fixed lenses on
     multi-lens IT-Blue/XM cameras whose RTSP server exposes only the PTZ view.
     No device configuration is changed.
     """
@@ -1667,19 +1667,7 @@ class DvripLiveStreamSession(LiveStreamSession):
 
     @staticmethod
     def _dvrip_target(url: str) -> tuple[str, int, int, int]:
-        parsed = urlparse(url)
-        if parsed.scheme.lower() != "dvrip" or not parsed.hostname:
-            raise ValueError("URL DVRIP inválida")
-        query = parse_qs(parsed.query)
-        try:
-            channel = max(0, int((query.get("channel") or ["0"])[0]))
-        except (TypeError, ValueError):
-            channel = 0
-        try:
-            subtype = 1 if int((query.get("subtype") or ["0"])[0]) == 1 else 0
-        except (TypeError, ValueError):
-            subtype = 0
-        return parsed.hostname, int(parsed.port or 34567), channel, subtype
+        return parse_dvrip_route(url)
 
     def _dvrip_decoder_command(self, codec: str) -> list[str]:
         ffmpeg = shutil.which("ffmpeg")
@@ -1692,7 +1680,7 @@ class DvripLiveStreamSession(LiveStreamSession):
         )
         return [
             ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "warning",
-            "-fflags", "nobuffer", "-flags", "low_delay",
+            "-probesize", "32768", "-analyzeduration", "0", "-flags", "low_delay",
             "-f", fmt, "-i", "pipe:0",
             "-map", "0:v:0", "-an", "-sn", "-dn",
             "-vf", vf, "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1",
@@ -1751,6 +1739,7 @@ class DvripLiveStreamSession(LiveStreamSession):
             first_packet: tuple[int, bytes] | None = None
             # Wait for a keyframe because it carries the media codec marker.
             deadline = time.monotonic() + 6.0
+            session.media_deadline = deadline
             while not self._stop.is_set() and time.monotonic() < deadline:
                 ptype, packet = session.read_media_packet()
                 if ptype not in (0xFC, 0xFE):
@@ -1764,6 +1753,9 @@ class DvripLiveStreamSession(LiveStreamSession):
                     raise DvripError(f"codec de vídeo DVRIP não suportado: 0x{media_code:02x}")
                 first_packet = (ptype, packet)
                 break
+            session.media_deadline = 0.0
+            if session.sock is not None:
+                session.sock.settimeout(session.timeout)
             if not first_packet or not codec:
                 raise DvripError("DVRIP conectado, mas nenhum keyframe de vídeo foi recebido")
 
@@ -1810,13 +1802,14 @@ class DvripLiveStreamSession(LiveStreamSession):
             feeder_thread.start()
 
             while not self._stop.is_set():
-                raw = self._read_exact(proc.stdout, FRAME_SIZE, self._stop)
+                raw = self._read_exact(proc.stdout, FRAME_SIZE, self._stop, inactivity_timeout=FRAME_INACTIVITY_TIMEOUT)
                 if len(raw) != FRAME_SIZE:
-                    if feeder_done.is_set():
-                        break
-                    if proc.poll() is not None:
-                        break
-                    continue
+                    if not self._stop.is_set():
+                        self.last_error_class = "frame_timeout" if proc.poll() is None else "truncated_frame"
+                        self.last_error_origin = "DVRIP/decoder"
+                        self._push_diag("Watchdog DVRIP • recuperando somente este canal")
+                    self.last_reconnect_cause = "DVRIP/decoder sem frame completo"
+                    break
                 if not got_frame:
                     got_frame = True
                     self.ever_had_frame = True
@@ -1826,7 +1819,11 @@ class DvripLiveStreamSession(LiveStreamSession):
             if feeder_error:
                 self._push_diag(f"{profile}: feeder DVRIP encerrou: {feeder_error[-1]}")
         except (OSError, ValueError, DvripError) as exc:
-            self._push_diag(f"{profile}: falha DVRIP: {type(exc).__name__}: {exc}")
+            code = dvrip_error_code(exc)
+            if code == "authentication":
+                self._authentication_failure.set()
+            self.last_reconnect_cause = f"DVRIP: {code}"
+            self._push_diag(f"{profile}: falha DVRIP: {code}")
         finally:
             if session is not None:
                 try:

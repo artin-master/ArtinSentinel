@@ -23,7 +23,7 @@ from .recorder import (
 )
 from .live import probe_rtsp_media_capabilities, authenticated_rtsp_url, ffmpeg_rtsp_timeout_args
 from .akdb import audio_capability
-from .xm_dvrip import dvrip_multilens_hints, probe_dvrip_media, dvrip_frame_signature, DvripError
+from .xm_dvrip import dvrip_multilens_hints, probe_dvrip_media, dvrip_frame_signature, DvripError, parse_dvrip_route
 
 
 @dataclass(slots=True)
@@ -533,13 +533,13 @@ def _scan_itblue_x3_multilens_rtsp(ip: str, username: str, password: str, progre
                 report(number, route, profile, False, "endpoint diferente; rota antiga não testada", decision="pending_endpoint")
                 continue
             if parsed.scheme == "dvrip":
-                query = parse_qs(parsed.query)
-                native = (query.get("channel") or [""])[0]
-                subtype = (query.get("subtype") or [""])[0]
-                if not native.isdigit() or int(native) != number - 1 or subtype not in {"0", "1"}:
+                try:
+                    host, native_port, native, subtype = parse_dvrip_route(route)
+                except (ValueError, TypeError):
                     report(number, route, profile, False, "índice nativo ambíguo", decision="pending_identity")
                     continue
-                probe = probe_dvrip_media(ip, username, password, channel=int(native), subtype=int(subtype), timeout=4.0)
+                probe = probe_dvrip_media(host, username, password, channel=native, subtype=subtype,
+                                         port=native_port, timeout=4.0, cancel_event=cancel_event)
                 ok, detail = probe.ok, getattr(probe, "detail", "sem confirmação")
                 codec = getattr(probe, "codec", "")
             elif parsed.scheme == "rtsp":
