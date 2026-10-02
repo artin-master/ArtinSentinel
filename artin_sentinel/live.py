@@ -13,7 +13,7 @@ import time
 from dataclasses import dataclass
 from urllib.parse import quote, urlparse, urlunparse
 
-from .xm_dvrip import DvripSession, DvripError, parse_dvrip_route, dvrip_error_code
+from .xm_dvrip import DvripSession, DvripError, parse_dvrip_route, dvrip_error_code, dvrip_video_metadata
 from .media_process import terminate_media_process
 
 
@@ -1664,6 +1664,7 @@ class DvripLiveStreamSession(LiveStreamSession):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._dvrip_session: DvripSession | None = None
+        self.native_diagnostics: dict = {}
 
     @staticmethod
     def _dvrip_target(url: str) -> tuple[str, int, int, int]:
@@ -1715,42 +1716,63 @@ class DvripLiveStreamSession(LiveStreamSession):
         self._push_status(f"Conectando • {profile} • DVRIP")
         self._push_diag(f"Tentativa {self.attempts}: iniciando {profile} via DVRIP/34567")
         got_frame = False
+        started = time.monotonic()
+        stage = "route"
+        codec = ""
+        received_packets = received_bytes = 0
+        first_frame_ms = None
+        classification = "inconclusive"
+        self.native_diagnostics = {"channel": None, "subtype": None, "login": "not_attempted",
+                                   "monitor_sent": False, "codec": "", "first_frame": False}
         proc = None
         session = None
         feeder_thread = stderr_thread = None
         feeder_done = threading.Event()
+        attempt_closed = threading.Event()
         feeder_error: list[str] = []
         try:
             host, port, channel, subtype = self._dvrip_target(url)
+            self.native_diagnostics.update(channel=channel, subtype=subtype)
+            self._push_diag(f"DVRIP • channel={channel} • subtype={subtype} • porta={port} • sessão/socket independentes")
+            stage = "connect"
             session = DvripSession(host, self.username, self.password, port=port, timeout=3.0)
             self._dvrip_session = session
             session.connect()
             if self._stop.is_set():
                 return False
+            stage = "login"
             session.login()
+            self.native_diagnostics["login"] = "ok"
+            self._push_diag("DVRIP • login OK")
             if self._stop.is_set():
                 return False
+            stage = "claim"
             session.monitor_claim(channel, subtype)
+            self._push_diag(f"DVRIP • OPMonitor Claim channel={channel} subtype={subtype} • Ret={getattr(session, 'monitor_reply_code', None)}")
             if self._stop.is_set():
                 return False
+            stage = "monitor"
             session.monitor_start(channel, subtype)
+            self.native_diagnostics["monitor_sent"] = True
+            self._push_diag(f"DVRIP • OPMonitor Start enviado • channel={channel} • subtype={subtype}")
 
             codec = ""
             first_packet: tuple[int, bytes] | None = None
             # Wait for a keyframe because it carries the media codec marker.
             deadline = time.monotonic() + 6.0
             session.media_deadline = deadline
+            session.media_cancel = self._stop
+            stage = "keyframe"
             while not self._stop.is_set() and time.monotonic() < deadline:
                 ptype, packet = session.read_media_packet()
+                received_packets += 1
+                received_bytes += len(packet)
                 if ptype not in (0xFC, 0xFE):
                     continue
-                media_code = int(packet[4]) if len(packet) > 5 else 0
-                if media_code in (0x02, 0x12):
-                    codec = "h264"
-                elif media_code in (0x03, 0x13, 0x43, 0x53):
-                    codec = "hevc"
-                else:
-                    raise DvripError(f"codec de vídeo DVRIP não suportado: 0x{media_code:02x}")
+                self.native_diagnostics["media_marker"] = packet[4] if len(packet) > 4 else None
+                codec, native_fps, width, height = dvrip_video_metadata(packet)
+                self.native_diagnostics["codec"] = codec
+                self._push_diag(f"DVRIP • keyframe • codec={codec} • marcador=0x{packet[4]:02x} • {width}x{height} • FPS={native_fps}")
                 first_packet = (ptype, packet)
                 break
             session.media_deadline = 0.0
@@ -1759,6 +1781,7 @@ class DvripLiveStreamSession(LiveStreamSession):
             if not first_packet or not codec:
                 raise DvripError("DVRIP conectado, mas nenhum keyframe de vídeo foi recebido")
 
+            stage = "decoder"
             proc = subprocess.Popen(
                 self._dvrip_decoder_command(codec), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 bufsize=0, close_fds=True, env=os.environ.copy(),
@@ -1774,23 +1797,31 @@ class DvripLiveStreamSession(LiveStreamSession):
                 stderr_thread.start()
 
             def feed() -> None:
+                nonlocal received_packets, received_bytes
                 pending = [first_packet]
                 try:
-                    while not self._stop.is_set() and proc.poll() is None:
+                    while not self._stop.is_set() and not attempt_closed.is_set() and proc.poll() is None:
                         if pending:
                             ptype, packet = pending.pop(0)
                         else:
                             ptype, packet = session.read_media_packet()
+                            received_packets += 1
+                            received_bytes += len(packet)
                         payload = self._video_payload(ptype, packet)
                         if not payload:
                             continue
                         try:
-                            proc.stdin.write(payload)
+                            remaining = memoryview(payload)
+                            while remaining and not self._stop.is_set() and not attempt_closed.is_set():
+                                written = proc.stdin.write(remaining)
+                                if not written:
+                                    raise BrokenPipeError("decoder stdin fechado")
+                                remaining = remaining[written:]
                         except (BrokenPipeError, OSError):
                             break
                 except Exception as exc:
                     if not self._stop.is_set():
-                        feeder_error.append(f"{type(exc).__name__}: {exc}")
+                        feeder_error.append(dvrip_error_code(exc))
                 finally:
                     try:
                         proc.stdin.close()
@@ -1812,19 +1843,29 @@ class DvripLiveStreamSession(LiveStreamSession):
                     break
                 if not got_frame:
                     got_frame = True
+                    first_frame_ms = round((time.monotonic() - started) * 1000)
+                    self.native_diagnostics["first_frame"] = True
+                    self._push_diag(f"DVRIP • primeiro frame decodificado em {first_frame_ms} ms")
                     self.ever_had_frame = True
                     self._push_status(f"● AO VIVO • {profile} • DVRIP")
                     self._push_diag(f"{profile}: primeiro frame {codec.upper()} recebido por DVRIP canal {channel}")
                 self._push_frame(FramePacket(raw))
+            classification = "validated" if got_frame else "payload_without_frame"
             if feeder_error:
                 self._push_diag(f"{profile}: feeder DVRIP encerrou: {feeder_error[-1]}")
         except (OSError, ValueError, DvripError) as exc:
             code = dvrip_error_code(exc)
+            classification = "monitor_rejected" if stage in {"claim", "monitor", "keyframe"} and getattr(session, "monitor_reply_code", None) not in (None, 100, 515) else code
+            if stage == "login":
+                self.native_diagnostics["login"] = "failed"
             if code == "authentication":
                 self._authentication_failure.set()
             self.last_reconnect_cause = f"DVRIP: {code}"
             self._push_diag(f"{profile}: falha DVRIP: {code}")
         finally:
+            attempt_closed.set()
+            if self._stop.is_set() and not got_frame:
+                classification = "cancelled"
             if session is not None:
                 try:
                     session.close()
@@ -1834,8 +1875,22 @@ class DvripLiveStreamSession(LiveStreamSession):
             terminate_media_process(proc)
             for helper in (feeder_thread, stderr_thread):
                 if helper is not None:
-                    helper.join(timeout=0.2)
+                    helper.join(timeout=1.0)
             self._process = None
+            self.native_diagnostics.update(stage=stage, classification=classification, first_frame=got_frame,
+                first_frame_ms=first_frame_ms, packets=received_packets, bytes=received_bytes,
+                chunks=getattr(session, "media_chunks_received", 0),
+                transport_bytes=getattr(session, "media_bytes_received", 0),
+                login_ret=getattr(session, "login_reply_code", None),
+                firmware_ret=getattr(session, "monitor_reply_code", None),
+                last_message=getattr(session, "last_media_message", None),
+                elapsed_ms=round((time.monotonic() - started) * 1000))
+            self._push_diag(f"DVRIP final • channel={self.native_diagnostics['channel']} • subtype={self.native_diagnostics['subtype']} • "
+                f"etapa={stage} • login={self.native_diagnostics['login']} • login_Ret={self.native_diagnostics['login_ret']} • Ret={self.native_diagnostics['firmware_ret']} • codec={codec or '?'} • "
+                f"marcador={self.native_diagnostics.get('media_marker')} • pacotes={received_packets} • bytes={received_bytes} • chunks={self.native_diagnostics['chunks']} • "
+                f"bytes_transporte={self.native_diagnostics['transport_bytes']} • msg={self.native_diagnostics['last_message']} • "
+                f"monitor_enviado={self.native_diagnostics['monitor_sent']} • primeiro_frame={'sim' if got_frame else 'não'} • primeiro_frame_ms={first_frame_ms} • "
+                f"tempo_ms={self.native_diagnostics['elapsed_ms']} • resultado={classification}")
         if not got_frame:
             self._push_diag(f"{profile}: nenhum frame DVRIP recebido")
         return got_frame

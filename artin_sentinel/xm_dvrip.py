@@ -46,7 +46,7 @@ def _recv_exact(sock: socket.socket, size: int, *, deadline=0.0, cancel_event=No
             part = sock.recv(size - len(data))
         except socket.timeout:
             # Poll cancellation without losing an already received partial packet.
-            if cancel_event is not None and deadline and time.monotonic() < deadline:
+            if deadline and time.monotonic() < deadline:
                 continue
             raise
         if not part:
@@ -68,6 +68,12 @@ class DvripSession:
     media_buffer: bytes = b""
     media_deadline: float = 0.0
     media_cancel: object = None
+    media_bytes_received: int = 0
+    media_chunks_received: int = 0
+    media_packets_received: int = 0
+    last_media_message: int | None = None
+    monitor_reply_code: int | None = None
+    login_reply_code: int | None = None
 
     def connect(self) -> None:
         if self.sock is not None:
@@ -151,6 +157,7 @@ class DvripSession:
             },
         )
         ret = int(reply.get("Ret", -1))
+        self.login_reply_code = ret
         if ret not in _OK:
             messages = {
                 203: "credencial DVRIP recusada",
@@ -185,6 +192,7 @@ class DvripSession:
         }
         reply = self._send_json(1413, payload)
         ret = int(reply.get("Ret", 100 if not reply else -1))
+        self.monitor_reply_code = ret
         if ret not in _OK:
             raise DvripError(f"claim de monitor DVRIP recusado (Ret={ret})")
         return reply
@@ -211,7 +219,29 @@ class DvripSession:
         except (OSError, socket.timeout) as exc:
             raise DvripError(f"falha ao receber mídia DVRIP: {exc}") from exc
         self.session = int(session or self.session)
+        self.media_chunks_received += 1
+        self.media_bytes_received += len(body)
+        self.last_media_message = int(response_id)
         return int(response_id), body
+
+    def _read_monitor_chunk(self) -> bytes:
+        while True:
+            message, body = self.read_stream_chunk()
+            if message == 1412:
+                # Compressed continuation data may begin with '{'; it is not JSON.
+                return body
+            if message in (1411, 1414):
+                try:
+                    reply = json.loads(body.rstrip(b"\x00\n"))
+                    value = reply.get("Ret") if isinstance(reply, dict) else None
+                    if isinstance(value, int) and not isinstance(value, bool):
+                        self.monitor_reply_code = value
+                        if value not in _OK:
+                            raise DvripError(f"monitor DVRIP recusado (Ret={value})")
+                except (ValueError, UnicodeDecodeError):
+                    raise DvripError("resposta de monitor DVRIP inválida") from None
+                continue
+            raise DvripError(f"mensagem de mídia DVRIP inesperada (id={message})")
 
     def read_media_packet(self) -> tuple[int, bytes]:
         """Read one proprietary XM media packet from OPMonitor chunks."""
@@ -219,20 +249,14 @@ class DvripSession:
         while True:
             # Need at least a complete proprietary media header.
             while len(buf) < 16:
-                _msgid, body = self.read_stream_chunk()
-                stripped = body.lstrip()
-                if stripped.startswith(b"{"):
-                    # Ignore optional control acknowledgement interleaved before media.
-                    continue
-                buf.extend(body)
+                buf.extend(self._read_monitor_chunk())
             prefix = bytes(buf[:3])
             if prefix != b"\x00\x00\x01":
                 pos = bytes(buf).find(b"\x00\x00\x01")
                 if pos < 0:
                     if len(buf) > 1024 * 1024:
                         buf.clear()
-                    _msgid, body = self.read_stream_chunk()
-                    buf.extend(body)
+                    buf.extend(self._read_monitor_chunk())
                     continue
                 del buf[:pos]
                 if len(buf) < 16:
@@ -249,11 +273,11 @@ class DvripSession:
                 del buf[:3]
                 continue
             while len(buf) < size:
-                _msgid, body = self.read_stream_chunk()
-                buf.extend(body)
+                buf.extend(self._read_monitor_chunk())
             packet = bytes(buf[:size])
             del buf[:size]
             self.media_buffer = bytes(buf)
+            self.media_packets_received += 1
             return ptype, packet
 
     def get_config(self, name: str) -> dict:
@@ -428,6 +452,22 @@ def parse_dvrip_route(url: str) -> tuple[str, int, int, int]:
     return parsed.hostname, port, channel, subtype
 
 
+def dvrip_video_metadata(packet: bytes) -> tuple[str, int, int, int]:
+    """XM T byte packs codec in the low nibble and dimensions in high bits.
+
+    Header layout: docs/protocol.md in Moxnatiy/hass-xmeye, section 6.
+    """
+    if len(packet) <= 16 or packet[:3] != b"\x00\x00\x01" or packet[3] not in (0xFC, 0xFE):
+        raise DvripError("cabeçalho de vídeo DVRIP inválido")
+    marker = packet[4]
+    codec = {2: "h264", 3: "hevc"}.get(marker & 0x0F, "")
+    if not codec:
+        raise DvripError(f"codec DVRIP não suportado (marcador=0x{marker:02x})")
+    width = (((marker >> 4) & 3) * 256 + packet[6]) * 8
+    height = (((marker >> 6) & 3) * 256 + packet[7]) * 8
+    return codec, packet[5] & 31, width, height
+
+
 def dvrip_error_code(error: Exception) -> str:
     """Return controlled classifications; never export an exception payload."""
     cause = error
@@ -482,14 +522,7 @@ def probe_dvrip_media(
                     continue
                 if len(packet) <= 16 or packet[:4] != bytes((0, 0, 1, ptype)):
                     return DvripMediaProbe(False, detail="Pacote de vídeo DVRIP inválido", error_code="invalid_response")
-                media_code = int(packet[4])
-                fps = int(packet[5]) if len(packet) > 5 else 0
-                if media_code in (0x02, 0x12):
-                    codec = "h264"
-                elif media_code in (0x03, 0x13, 0x43, 0x53):
-                    codec = "hevc"
-                else:
-                    return DvripMediaProbe(False, detail="Codec DVRIP não suportado", error_code="protocol_unsupported")
+                codec, fps, _width, _height = dvrip_video_metadata(packet)
                 return DvripMediaProbe(True, codec=codec, fps=fps, detail=f"DVRIP canal {channel} {codec.upper()} {fps or '?'} fps")
     except (DvripError, OSError) as exc:
         code = "cancelled" if cancel_event is not None and cancel_event.is_set() else dvrip_error_code(exc)
@@ -520,11 +553,7 @@ def dvrip_frame_signature(host: str, username: str, password: str, *, channel: i
             while time.monotonic() < deadline and len(data) < 4 * 1024 * 1024:
                 ptype, packet = session.read_media_packet()
                 if ptype in (0xFC, 0xFE):
-                    media_code = packet[4] if len(packet) > 5 else 0
-                    codec = ("h264" if media_code in (0x02, 0x12) else
-                             "hevc" if media_code in (0x03, 0x13, 0x43, 0x53) else "")
-                    if not codec:
-                        return None
+                    codec, _fps, _width, _height = dvrip_video_metadata(packet)
                     data.extend(packet[16:])
                 elif ptype == 0xFD and codec:
                     data.extend(packet[8:])
