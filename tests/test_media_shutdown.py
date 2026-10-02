@@ -88,3 +88,14 @@ def test_app_close_captures_media_before_maps_are_cleared_and_stops_timers(monke
     finally:
         w.deleteLater()
         application.processEvents()
+
+
+def test_shutdown_retains_audio_predecessor_even_after_ui_clears_reference():
+    from artin_sentinel.media_process import media_session_chain
+    old = SimpleNamespace(wait_closed=Mock(return_value=True), _process=None)
+    new = SimpleNamespace(wait_closed=Mock(return_value=True), _process=None, _previous_session=old)
+    captured = media_session_chain([new])
+    new._previous_session = None
+    assert wait_media_sessions(captured)
+    old.wait_closed.assert_called_once()
+    new.wait_closed.assert_called_once()

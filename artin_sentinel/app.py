@@ -76,7 +76,7 @@ from .recorder import scan_intelbras_channels, scan_hikvision_channels, diagnose
 from .ip_camera import scan_direct_camera_streams, DirectCameraScanResult
 from .credential_store import CredentialStore
 from .app_auth import AppAuth
-from .media_process import wait_media_sessions
+from .media_process import wait_media_sessions, media_session_chain
 from .live import LiveStreamSession, LiveAudioSession, create_live_stream_session, local_media_status, ordered_audio_urls
 from .log_viewer import sanitize_log_text, read_log_tail, filter_log_lines
 from .stream_diagnostics import diagnose_saved_streams, STATE_LABELS as STREAM_STATE_LABELS
@@ -1538,6 +1538,8 @@ class DetachedMonitorWindow(QMainWindow):
 
     def stop_audio(self):
         sess=self.audio_session; self.audio_session=None; self.audio_tile_index=None
+        if sess is not None:
+            self._previous_audio_session = sess
         if sess: sess.stop()
         for t in self.video_tiles: t.set_audio_active(False)
 
@@ -1552,14 +1554,15 @@ class DetachedMonitorWindow(QMainWindow):
         creds=self.controller._credentials_for_device(int(dev["id"]))
         if not creds:
             tile.set_audio_active(False); return
-        previous_audio = self.audio_session
+        previous_audio = self.audio_session or getattr(self, "_previous_audio_session", None)
         self.stop_audio(); user,pwd=creds
         self.audio_session=LiveAudioSession(
             urls, user, pwd, volume=self.audio_volume, previous_session=previous_audio,
             audio_confirmed=bool(info.get("can_listen")),
             audio_codec=str(ch["audio_codec"] or ""),
             audio_sample_rate=int(ch["audio_sample_rate"] or 0),
-        ); self.audio_tile_index=tile.index; tile.set_audio_active(True); self.audio_session.start()
+        ); self._previous_audio_session = None
+        self.audio_tile_index=tile.index; tile.set_audio_active(True); self.audio_session.start()
 
     def show_talkback(self,tile):
         ctx=self._audio_context(tile)
@@ -1669,7 +1672,8 @@ class DetachedMonitorWindow(QMainWindow):
     def closeEvent(self,event):
         self._closed = True
         self.visibility_timer.stop()
-        sessions = list(self.sessions.values()) + [self.audio_session]
+        sessions = media_session_chain(list(self.sessions.values()) + [
+            self.audio_session, getattr(self, "_previous_audio_session", None)])
         self.save_state(); self.stop_all(); self.poll_timer.stop()
         if not getattr(self.controller, "_closing_app", False):
             wait_media_sessions(sessions, timeout=1.5)
@@ -4201,6 +4205,8 @@ class MainWindow(QMainWindow):
     def stop_live_audio(self):
         self._audio_resume_generation = getattr(self, "_audio_resume_generation", 0) + 1
         session = self.live_audio_session
+        if session is not None:
+            self._live_audio_previous_session = session
         self.live_audio_session = None
         old_index = self.live_audio_tile_index
         self.live_audio_tile_index = None
@@ -4254,7 +4260,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Áudio", "Configure a credencial do equipamento antes de abrir o áudio.")
             tile.set_audio_active(False)
             return
-        previous_audio = self.live_audio_session
+        previous_audio = self.live_audio_session or getattr(self, "_live_audio_previous_session", None)
         self.stop_live_audio()
         username, password = credentials
         session = LiveAudioSession(
@@ -4263,6 +4269,7 @@ class MainWindow(QMainWindow):
             audio_codec=str(channel["audio_codec"] or ""),
             audio_sample_rate=int(channel["audio_sample_rate"] or 0),
         )
+        self._live_audio_previous_session = None
         self.live_audio_session = session
         self.live_audio_tile_index = tile.index
         self.live_audio_identity = self._audio_identity_text(device, channel)
@@ -9798,12 +9805,14 @@ class MainWindow(QMainWindow):
             return
         shutdown_sessions = list(self.live_sessions.values()) + [
             self.live_audio_session, self.talkback_session,
+            getattr(self, "_live_audio_previous_session", None),
             self.playback_session, self.playback_audio_session,
         ]
         shutdown_sessions.extend(self.playback_sessions.values())
         for window in self.detached_windows.values():
             shutdown_sessions.extend(window.sessions.values())
-            shutdown_sessions.append(window.audio_session)
+            shutdown_sessions.extend([window.audio_session, getattr(window, "_previous_audio_session", None)])
+        shutdown_sessions = media_session_chain(shutdown_sessions)
         self._closing_app = True
         self.save_live_workspace()
         if self.manual_recording is not None:

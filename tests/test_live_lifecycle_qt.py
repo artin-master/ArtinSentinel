@@ -227,3 +227,28 @@ def test_detached_focus_rebuild_and_close_leave_no_hidden_tiles_or_visibility_re
         w.deleteLater()
         controller.deleteLater()
         application.processEvents()
+
+
+def test_turning_listening_off_then_on_keeps_previous_player_as_handoff_owner(window, monkeypatch):
+    import artin_sentinel.app as app
+    tile = window.video_tiles[0]
+    old = Mock()
+    window.live_audio_session, window.live_audio_tile_index = old, 0
+    window.live_audio_volume = 75
+    monkeypatch.setattr(window, 'stop_live_audio', MainWindow.stop_live_audio.__get__(window))
+    monkeypatch.setattr(window, '_set_live_audio_bar', Mock())
+    monkeypatch.setattr(window, 'append_live_diagnostic', Mock())
+    window.stop_live_audio()
+    old.stop.assert_called_once()
+    assert window.live_audio_session is None
+    monkeypatch.setattr(window, '_audio_context_for_tile', lambda tile: (
+        dict(id=1), dict(audio_codec='aac', audio_sample_rate=8000),
+        dict(can_listen=True), ['rtsp://camera/main']))
+    monkeypatch.setattr(window, '_credentials_for_device', lambda did: ('admin', 'secret'))
+    monkeypatch.setattr(window, '_audio_identity_text', lambda *a: 'Camera')
+    constructor = Mock()
+    monkeypatch.setattr(app, 'LiveAudioSession', constructor)
+    window.toggle_tile_audio(tile)
+    assert constructor.call_args.kwargs['previous_session'] is old
+    constructor.return_value.start.assert_called_once()
+    assert window._live_audio_previous_session is None

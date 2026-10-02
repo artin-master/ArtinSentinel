@@ -36,6 +36,22 @@ def terminate_media_process(process, grace: float = 0.5) -> None:
                     pass
 
 
+def media_session_chain(sessions):
+    """Snapshot audio predecessors before Stop clears UI/session references."""
+    pending = list(sessions)
+    result, seen = [], set()
+    while pending:
+        session = pending.pop(0)
+        if session is None or id(session) in seen:
+            continue
+        seen.add(id(session))
+        result.append(session)
+        previous = vars(session).get('_previous_session')
+        if previous is not None:
+            pending.append(previous)
+    return result
+
+
 def wait_media_sessions(sessions, timeout: float = 4.0) -> bool:
     """Wait on one shared shutdown budget after callers requested Stop.
 
@@ -46,7 +62,7 @@ def wait_media_sessions(sessions, timeout: float = 4.0) -> bool:
     deadline = time.monotonic() + max(0.0, timeout)
     complete = True
     seen = set()
-    for session in sessions:
+    for session in media_session_chain(sessions):
         if session is None or id(session) in seen:
             continue
         seen.add(id(session))
