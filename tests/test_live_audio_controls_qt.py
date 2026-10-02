@@ -70,3 +70,39 @@ def test_listening_zero_is_muted_and_labels_are_clear(live_audio_controls):
     assert window.audio_volume_value.text() == "0%"
     assert window.live_audio_volume == 0
     assert window.audio_volume_slider.minimum() == 0
+
+
+@pytest.mark.parametrize("panel_width", [250, 285, 330])
+def test_active_microphone_and_ptt_controls_stay_inside_narrow_inspector(
+    live_audio_controls, panel_width,
+):
+    window, application = live_audio_controls
+    panel = window.centralWidget()
+    window.resize(panel_width, 420)
+    window.show()
+    window.microphone_row.show()
+    window.talkback_btn.setText("PARAR")
+    window.talkback_btn.show()
+    window.netsdk_mode_label.show()
+    window.netsdk_mode_combo.show()
+    window.microphone_combo.setItemText(
+        0, "Microfone USB PipeWire • dispositivo de captura Intelbras MiboCam instalado no balcão"
+    )
+    window.netsdk_mode_combo.setCurrentIndex(1)
+    application.processEvents()
+
+    controls = (
+        window.audio_volume_slider, window.audio_volume_value, window.listen_audio_btn,
+        window.talkback_btn, window.microphone_gain_slider, window.microphone_gain_value,
+        window.microphone_gain_reset_btn, window.microphone_test_btn,
+        window.microphone_combo, window.microphone_refresh_btn,
+        window.netsdk_mode_label, window.netsdk_mode_combo,
+    )
+    for control in controls:
+        control_name = control.objectName() or getattr(control, "text", lambda: "")()
+        assert control.isVisible(), control_name
+        left = control.mapTo(panel, control.rect().topLeft()).x()
+        assert left >= 0
+        assert left + control.width() <= panel.width(), (
+            control_name, left, control.width(), panel.width()
+        )
