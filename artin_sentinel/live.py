@@ -77,7 +77,7 @@ def authenticated_rtsp_url(url: str, username: str, password: str) -> str:
     return urlunparse((parsed.scheme or "rtsp", netloc, parsed.path, parsed.params, parsed.query, parsed.fragment))
 
 
-def sanitize_text(text: str) -> str:
+def sanitize_text(text: str, username: str = "", password: str = "") -> str:
     """Best-effort removal of secrets from FFmpeg/RTSP diagnostics."""
     if not text:
         return ""
@@ -85,6 +85,10 @@ def sanitize_text(text: str) -> str:
     text = re.sub(r"(Authorization:\s*)(.+)", r"\1<redacted>", text, flags=re.I)
     text = re.sub(r"(password[=_])[^_&\s/?]+", r"\1<redacted>", text, flags=re.I)
     text = re.sub(r"(_password_)[^_&\s/?]+", r"\1<redacted>", text, flags=re.I)
+    secrets = {value for secret in (username, password) if secret
+               for value in (secret, quote(secret, safe=""), quote(secret, safe="").replace("%20", "+"))}
+    for secret in sorted(secrets, key=len, reverse=True):
+        text = text.replace(secret, "<redacted>")
     return text.strip()
 
 
@@ -140,6 +144,10 @@ class MediaProbeResult:
     error_code: str = ""
     video_present: bool | None = None
     audio_present: bool | None = None
+
+    @property
+    def has_video(self) -> bool:
+        return bool(self.video_codec) if self.video_present is None else self.video_present
 
     @property
     def has_audio(self) -> bool:
@@ -401,7 +409,7 @@ def _pulse_sink_inputs_for_pid(pid: int) -> list[int]:
     return out
 
 
-def set_process_audio_gain(pid: int, slider_value: int, *, retries: int = 1, retry_delay: float = 0.08) -> tuple[bool, str]:
+def set_process_audio_gain(pid: int, slider_value: int, *, retries: int = 1, retry_delay: float = 0.08, cancel_event: threading.Event | None = None) -> tuple[bool, str]:
     """Apply per-process listening gain through Pulse/PipeWire, without restart.
 
     ``75`` remains unity and ``100`` remains 2x.  Pulse/PipeWire accepts volume
@@ -416,10 +424,14 @@ def set_process_audio_gain(pid: int, slider_value: int, *, retries: int = 1, ret
     attempts = max(1, int(retries or 1))
     last = "sink de áudio ainda não apareceu"
     for attempt in range(attempts):
+        if cancel_event is not None and cancel_event.is_set():
+            return False, "volume cancelado"
         ids = _pulse_sink_inputs_for_pid(pid)
         if ids:
             success = 0
             for sink_id in ids:
+                if cancel_event is not None and cancel_event.is_set():
+                    return False, "volume cancelado"
                 try:
                     cp = subprocess.run(
                         [pactl, "set-sink-input-volume", str(sink_id), f"{percent:.0f}%"],
@@ -435,7 +447,12 @@ def set_process_audio_gain(pid: int, slider_value: int, *, retries: int = 1, ret
             if success:
                 return True, f"ganho local {percent:.0f}%"
         if attempt + 1 < attempts:
-            time.sleep(max(0.01, float(retry_delay)))
+            delay = max(0.01, float(retry_delay))
+            if cancel_event is not None:
+                if cancel_event.wait(delay):
+                    return False, "volume cancelado"
+            else:
+                time.sleep(delay)
     return False, last
 
 
@@ -501,6 +518,10 @@ class LiveAudioSession:
         self._process: subprocess.Popen | None = None
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
+        self._process_lock = threading.Lock()
+        self._reaping_process = None
+        self._had_audio = False
+        self._last_player_duration = 0.0
         self._finished = threading.Event()
         self._volume_lock = threading.Lock()
         self._pending_volume: int | None = None
@@ -516,8 +537,10 @@ class LiveAudioSession:
         self._volume_attach_thread: threading.Thread | None = None
 
     def _set_state(self, state: str, detail: str = "", backend: str = "") -> None:
+        if self._stop.is_set() and state != "stopped":
+            return
         self.current_state = str(state or "idle")
-        self.current_detail = sanitize_text(detail)
+        self.current_detail = sanitize_text(detail, self.username, self.password)
         if backend:
             self.current_backend = str(backend)
 
@@ -532,7 +555,7 @@ class LiveAudioSession:
             return "ABRINDO" + (f" • {self.current_detail}" if self.current_detail else "")
         if self.current_state == "retrying":
             return "RECUPERANDO" + (f" • {self.current_detail}" if self.current_detail else "")
-        if self.current_state == "error":
+        if self.current_state in {"error", "unavailable", "no_audio", "unsupported_codec", "authentication"}:
             return "FALHA" + (f" • {self.current_detail}" if self.current_detail else "")
         if self.current_state == "stopped":
             return "DESLIGADO"
@@ -546,7 +569,7 @@ class LiveAudioSession:
         return bool(shutil.which("ffmpeg") and ({"pulse", "alsa"} & set(outputs)))
 
     def _push(self, q: queue.Queue[str], value: str) -> None:
-        value = sanitize_text(value)
+        value = sanitize_text(value, self.username, self.password)
         if not value:
             return
         while True:
@@ -628,12 +651,18 @@ class LiveAudioSession:
                 return False, "interrompido"
             self._push(self.diagnostics, f"áudio: tentando saída {backend}")
             self._set_state("opening", f"{backend}", backend)
+            proc = None
+            active_started = None
             try:
                 proc = subprocess.Popen(
                     command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                     stdin=subprocess.DEVNULL, env=os.environ.copy(), close_fds=True,
                 )
-                self._process = proc
+                with self._process_lock:
+                    self._process = proc
+                    cancelled = self._stop.is_set()
+                if cancelled:
+                    return False, "interrompido"
                 deadline = time.monotonic() + max(0.20, float(startup_grace))
                 while time.monotonic() < deadline and proc.poll() is None and not self._stop.is_set():
                     time.sleep(0.04)
@@ -650,7 +679,10 @@ class LiveAudioSession:
                         for line in err.splitlines()[-6:]:
                             if not _low_value_ffmpeg_warning(line):
                                 self._push(self.diagnostics, f"áudio/{backend}: {line}")
-                        last_error = sanitize_text(err.splitlines()[-1])
+                        last_error = sanitize_text(err.splitlines()[-1], self.username, self.password)
+                        if classify_media_probe_error(err)[0] == "authentication":
+                            self._set_state("authentication", "Falha de autenticação", backend)
+                            return False, "Falha de autenticação"
                         if _transient_rtsp_error(err):
                             self.had_transient_failure = True
                             self._set_state("retrying", "RTSP ocupado/503 transitório", backend)
@@ -664,6 +696,8 @@ class LiveAudioSession:
                 self.detected_codec = str(codec or "").lower() if codec != "áudio" else self.detected_codec
                 self.detected_sample_rate = int(sample_rate or self.detected_sample_rate or 0)
                 self.detected_url = candidate
+                self._had_audio = True
+                active_started = time.monotonic()
                 self._set_state("active", "", backend)
                 if self.had_transient_failure:
                     self._push(self.diagnostics, "✓ Áudio recuperado após falha transitória de abertura")
@@ -675,11 +709,15 @@ class LiveAudioSession:
                         if self._stop.is_set():
                             break
                         line = raw.decode("utf-8", "replace").strip()
+                        if classify_media_probe_error(line)[0] == "authentication":
+                            self._set_state("authentication", "Falha de autenticação", backend)
                         if line and not _low_value_ffmpeg_warning(line):
                             self._push(self.diagnostics, f"áudio/{backend}: {line}")
                 rc = proc.wait() if proc.poll() is None else proc.returncode
                 if self._stop.is_set():
                     return True, ""
+                if self.current_state == "authentication":
+                    return False, "Falha de autenticação"
                 if rc in (0, None):
                     return True, ""
                 last_error = f"{backend} encerrou com código {rc}"
@@ -689,6 +727,9 @@ class LiveAudioSession:
                 self._set_state("error", last_error, backend)
                 self._push(self.diagnostics, f"áudio: {last_error}")
             finally:
+                if active_started is not None:
+                    self._last_player_duration = time.monotonic() - active_started
+                terminate_media_process(proc)
                 self._process = None
         return False, last_error
 
@@ -701,7 +742,7 @@ class LiveAudioSession:
             return
 
         def worker() -> None:
-            ok, detail = set_process_audio_gain(pid, self.volume, retries=18, retry_delay=0.12)
+            ok, detail = set_process_audio_gain(pid, self.volume, retries=18, retry_delay=0.12, cancel_event=self._stop)
             if self._stop.is_set():
                 return
             if ok:
@@ -717,9 +758,8 @@ class LiveAudioSession:
         self._volume_attach_thread.start()
 
     def start(self) -> None:
-        if self._thread and self._thread.is_alive():
+        if self._stop.is_set() or (self._thread and self._thread.is_alive()):
             return
-        self._stop.clear()
         self._finished.clear()
         self._set_state("opening", "preparando áudio")
         self._thread = threading.Thread(target=self._run_wrapper, name="sentinel-audio", daemon=True)
@@ -729,17 +769,40 @@ class LiveAudioSession:
     def finished(self) -> bool:
         return self._finished.is_set()
 
+    def wait_closed(self, timeout: float = 1.0) -> bool:
+        return self._finished.wait(max(0.0, timeout))
+
     def _run_wrapper(self) -> None:
+        failures = 0
         try:
-            self._run()
+            while not self._stop.is_set():
+                self._last_player_duration = 0.0
+                self._run()
+                if (self.playback or not self._had_audio or self._stop.is_set()
+                        or self.current_state in {"no_audio", "unsupported_codec", "authentication", "unavailable"}):
+                    break
+                failures = 0 if self._last_player_duration >= 5.0 else failures + 1
+                delay = (2.0, 5.0, 10.0, 30.0)[min(max(failures - 1, 0), 3)]
+                self._set_state("retrying", f"nova tentativa em {delay:g} s")
+                self._push(self.status, f"Áudio: reconectando em {delay:g} s")
+                if self._stop.wait(delay):
+                    break
         finally:
+            terminate_media_process(self._process)
+            self._process = None
             self._finished.set()
 
     def stop(self) -> None:
         """Request audio stop without blocking the UI/event-loop caller."""
-        self._stop.set()
+        with self._process_lock:
+            self._stop.set()
+            proc = self._process
+            if proc is not None and self._reaping_process is proc:
+                return
+            self._reaping_process = proc
         self._set_state("stopped")
-        proc = self._process
+        if self._thread is None and proc is None:
+            self._finished.set()
         if proc is not None and proc.poll() is None:
             try:
                 proc.terminate()
@@ -754,6 +817,12 @@ class LiveAudioSession:
                         proc.kill()
                     except OSError:
                         pass
+                    try:
+                        proc.wait(timeout=0.5)
+                    except Exception:
+                        pass
+                finally:
+                    terminate_media_process(proc)
 
             threading.Thread(target=reap, name="sentinel-audio-reaper", daemon=True).start()
         # Do not wait/join here. The playback worker owns final cleanup and will
@@ -770,7 +839,9 @@ class LiveAudioSession:
             proc = self._process
             if proc is None or proc.poll() is not None:
                 return
-            ok, detail = set_process_audio_gain(proc.pid, value, retries=2, retry_delay=0.05)
+            ok, detail = set_process_audio_gain(proc.pid, value, retries=2, retry_delay=0.05, cancel_event=self._stop)
+            if self._stop.is_set() or self._process is not proc:
+                return
             self.dynamic_volume_active = bool(ok)
             self._push(self.diagnostics, ("✓ controle de volume ativo • " if ok else "áudio/volume: ") + detail)
             # Coalesce slider events: if a newer value arrived while pactl was
@@ -818,9 +889,11 @@ class LiveAudioSession:
 
     def _run(self) -> None:
         if not self.player_available:
+            self._set_state("unavailable", "player local ausente")
             self._push(self.status, "Áudio indisponível • player local ausente")
             return
         if not self.urls:
+            self._set_state("unavailable", "nenhuma URL de mídia")
             self._push(self.status, "Áudio indisponível • nenhuma URL de mídia")
             return
 
@@ -866,7 +939,7 @@ class LiveAudioSession:
                         ok, err = self._try_player(
                             candidate, "tcp", codec=codec, sample_rate=self.audio_sample_rate, startup_grace=0.45
                         )
-                        if ok or self._stop.is_set():
+                        if ok or self._stop.is_set() or self.current_state == "authentication":
                             return
                         if err:
                             self._push(self.diagnostics, f"áudio rápido: {err}")
@@ -878,6 +951,8 @@ class LiveAudioSession:
 
         self._push(self.status, "Áudio: procurando faixa no Main/Sub…")
         saw_track = False
+        saw_video = False
+        unsupported_codec = False
         last_error = ""
         for url_index, candidate in enumerate(self.urls, start=1):
             if self._stop.is_set():
@@ -892,12 +967,20 @@ class LiveAudioSession:
                     self.diagnostics,
                     f"áudio: perfil {url_index}/{len(self.urls)} via {transport.upper()} • {probe.detail}",
                 )
+                if self._stop.is_set():
+                    return
+                if probe.error_code == "authentication":
+                    self._set_state("authentication", "Falha de autenticação")
+                    self._push(self.status, "Áudio indisponível • falha de autenticação")
+                    return
+                saw_video |= probe.has_video
                 if not probe.has_audio:
                     last_error = probe.detail or "sem faixa de áudio"
                     continue
                 saw_track = True
                 codec = probe.audio_codec or "áudio"
                 if codec and not local_decoder_available(codec):
+                    unsupported_codec = True
                     last_error = f"decoder local ausente para {codec}"
                     self._push(self.diagnostics, f"áudio: {last_error}")
                     continue
@@ -917,11 +1000,11 @@ class LiveAudioSession:
             return
         if saw_track:
             detail = "Falha na saída de áudio local" + (f" • {last_error}" if last_error else "")
-            self._set_state("error", detail)
+            self._set_state("unsupported_codec" if unsupported_codec else "error", detail)
             self._push(self.status, detail)
         else:
-            detail = "Sem faixa de áudio nos streams Main/Sub" + (f" • {last_error}" if last_error else "")
-            self._set_state("error", detail)
+            detail = ("Sem faixa de áudio nos streams Main/Sub" if saw_video else "Áudio não confirmado • stream indisponível") + (f" • {last_error}" if last_error else "")
+            self._set_state("no_audio" if saw_video else "error", detail)
             self._push(self.status, detail)
 
 @dataclass(slots=True)
@@ -1147,7 +1230,7 @@ class LiveStreamSession:
                     return
 
     def _push_diag(self, text: str) -> None:
-        text = sanitize_text(text)
+        text = sanitize_text(text, self.username, self.password)
         if not text:
             return
         stamp = time.strftime("%H:%M:%S")

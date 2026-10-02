@@ -1511,7 +1511,10 @@ class DetachedMonitorWindow(QMainWindow):
 
     def change_tile_stream(self,tile,mode):
         if not tile.source:return
+        listening = self.audio_tile_index == tile.index and self.audio_session is not None
         src=dict(tile.source); src["forced_stream"]=mode if mode!="auto" else ""; self.apply_source(tile,src)
+        if listening and tile.index in self.sessions:
+            self.toggle_audio(tile)
 
     def change_tile_display_mode(self, tile, mode):
         tile.set_display_mode(mode)
@@ -2680,7 +2683,9 @@ class MainWindow(QMainWindow):
         existing_by_index = {tile.index: dict(tile.source) for tile in self.video_tiles if tile.source}
         overflow = [idx for idx in existing_by_index if idx >= count]
         self.stop_all_live_streams()
-        self._focus_return_state = None
+        if self._focus_return_state is not None:
+            self._focus_return_state = None
+            self._restore_video_grid_geometry()
         while self.video_grid.count():
             item = self.video_grid.takeAt(0)
             widget = item.widget()
@@ -4662,6 +4667,7 @@ class MainWindow(QMainWindow):
     def change_tile_stream(self, tile: VideoTile, mode: str):
         if not tile.source or tile.source.get("type") != "channel":
             return
+        listening = self.live_audio_tile_index == tile.index and self.live_audio_session is not None
         channel_id = int(tile.source["channel_id"])
         self.db.update_channel_preferred_stream(channel_id, mode)
         source = dict(tile.source)
@@ -4669,6 +4675,8 @@ class MainWindow(QMainWindow):
         if source.get("forced_stream") is None:
             source.pop("forced_stream", None)
         self.apply_source_to_tile(tile, source)
+        if listening and tile.index in self.live_sessions:
+            self.toggle_tile_audio(tile)
         self.save_live_workspace()
         self.refresh_source_tree(self.db.list_sites(), self.db.list_devices(None))
 

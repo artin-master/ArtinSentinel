@@ -23,11 +23,13 @@ def terminate_media_process(process, grace: float = 0.5) -> None:
                 except Exception:
                     pass
         else:
-            process.wait(timeout=0.1)
+            wait = getattr(process, "wait", None)
+            if callable(wait):
+                wait(timeout=0.1)
     finally:
         for name in ('stdin', 'stdout', 'stderr'):
             pipe = getattr(process, name, None)
-            if pipe is not None:
+            if pipe is not None and callable(getattr(pipe, "close", None)):
                 try:
                     pipe.close()
                 except (OSError, ValueError):

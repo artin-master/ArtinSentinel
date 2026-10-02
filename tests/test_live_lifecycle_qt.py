@@ -131,3 +131,34 @@ def test_move_active_talkback_tracks_original_channel_and_stops_ptz(window, monk
 def test_closed_detached_window_cannot_resume_on_visibility_timer():
     stub = SimpleNamespace(_closed=True)
     DetachedMonitorWindow._sync_stream_visibility(stub)
+
+
+def test_rebuild_while_focused_deletes_hidden_old_tiles_and_resets_focus(window, monkeypatch):
+    old_tiles = list(window.video_tiles)
+    deleted = []
+    for tile in old_tiles:
+        monkeypatch.setattr(tile, 'deleteLater', lambda t=tile: deleted.append(t))
+    monkeypatch.setattr(window, 'apply_source_to_tile', Mock())
+    window.bottom_notice = QLabel()
+    window.focus_video_tile(old_tiles[0])
+    window.rebuild_video_grid(4)
+    assert deleted == old_tiles
+    assert window._focus_return_state is None
+    assert window.video_grid.count() == 4
+    assert all(not t.isHidden() for t in window.video_tiles)
+
+
+@pytest.mark.parametrize('mode', ['main', 'sub', 'auto'])
+def test_stream_switch_preserves_existing_listening_preference_once(window, monkeypatch, mode):
+    tile = window.video_tiles[0]
+    window.db = Mock()
+    window.live_audio_tile_index = 0
+    window.live_audio_session = Mock()
+    window.live_sessions = {0: Mock()}
+    monkeypatch.setattr(window, 'apply_source_to_tile', Mock())
+    monkeypatch.setattr(window, 'refresh_source_tree', Mock())
+    monkeypatch.setattr(window, 'toggle_tile_audio', Mock())
+    window.change_tile_stream(tile, mode)
+    window.toggle_tile_audio.assert_called_once_with(tile)
+    source = window.apply_source_to_tile.call_args.args[1]
+    assert source.get('forced_stream') == (None if mode == 'auto' else mode)
