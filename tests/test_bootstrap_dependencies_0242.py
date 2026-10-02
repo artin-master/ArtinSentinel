@@ -6,7 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_version_0242():
-    assert __version__ == "0.2.92"
+    assert __version__ == "0.2.93"
 
 
 def test_installer_has_real_check_mode_and_supported_package_managers():

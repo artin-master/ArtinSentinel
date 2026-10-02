@@ -14,7 +14,7 @@ from artin_sentinel.talkback import IntelbrasNetSDKTalkbackSession
 
 
 def test_release_version_0241():
-    assert __version__ == "0.2.92"
+    assert __version__ == "0.2.93"
 
 
 def _configured_variant(*, wait=False, speaker=0):

@@ -8,7 +8,7 @@ from artin_akdb import CORE_REVISION, record_by_legacy_key
 
 
 def test_release_0233_and_akdb_revision():
-    assert __version__ == "0.2.92"
+    assert __version__ == "0.2.93"
     assert CORE_REVISION >= 11
     x3 = record_by_legacy_key("it-blue-x3-we2q")
     assert x3 is not None

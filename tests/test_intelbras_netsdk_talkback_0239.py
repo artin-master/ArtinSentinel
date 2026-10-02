@@ -9,7 +9,7 @@ from artin_sentinel.talkback import IntelbrasNetSDKTalkbackSession
 
 
 def test_release_version_0239():
-    assert __version__ == "0.2.92"
+    assert __version__ == "0.2.93"
 
 
 def test_vendor_demo_pcm_path_is_preferred():

@@ -15,7 +15,7 @@ from artin_sentinel.akdb_shared import record_compatibility_candidate, sentinel_
 
 
 def test_release_is_0215():
-    assert __version__ == "0.2.92"
+    assert __version__ == "0.2.93"
 
 
 def test_shared_core_has_stable_ids_and_supported_apps():

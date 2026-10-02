@@ -1,7 +1,8 @@
-# Ciclo funcional em desenvolvimento — base Artin Sentinel 0.2.92
+# Ciclo funcional 0.2.93 — validação e limites
 
-Este trabalho prepara o próximo ciclo; a versão oficial continua 0.2.92.
-Não é uma release, publicação ou declaração de homologação de hardware.
+Este documento distingue os testes automatizados, o relato de validação física
+recebido para os equipamentos disponíveis e os testes de hardware que continuam
+pendentes. Não amplia a compatibilidade declarada do produto.
 
 ## Comportamentos implementados
 
@@ -66,11 +67,29 @@ Usar o ambiente e isolamento descritos em TESTING.md. As regressões estão em:
 - tests/test_channel_health_transitions.py
 - tests/test_talkback_readiness.py
 
-Resultado final deste ciclo: **594 coletados, 594 aprovados, 0 falhas, 0 erros,
+Resultado automatizado final conhecido deste ciclo: **594 coletados, 594 aprovados, 0 falhas, 0 erros,
 0 skipped**, com 65 regressões novas e todos os 529 testes anteriores preservados.
 
 A execução completa inclui todos os testes existentes, inclusive equipamentos,
 instalador, consistência de versão, atualização e serviços Web confirmados.
+
+## Validação física realizada
+
+Segundo o relato de campo fornecido, as funcionalidades principais foram
+verificadas nos equipamentos disponíveis; o MHDX 1004 e câmeras IP/MiboCam
+disponíveis participaram da validação, sem problemas aparentes nos fluxos
+verificados. Este registro não afirma que cada faixa produziu áudio audível,
+que a estabilidade contínua de cada stream foi medida ou que o movimento
+mecânico de PTZ foi observado. Esses resultados específicos só devem ser
+marcados após anotação direta no roteiro de campo.
+
+## Validação física pendente
+
+- **Hikvision:** não havia equipamento disponível neste ciclo; nenhuma validação
+  física Hikvision é declarada. Executar o roteiro abaixo na próxima oportunidade.
+- Registrar separadamente áudio realmente audível, estabilidade de stream e
+  comportamento mecânico de PTZ quando forem observados; testes automatizados ou
+  identificação de faixas/codec não substituem essas verificações físicas.
 
 ## Roteiro físico por equipamento
 

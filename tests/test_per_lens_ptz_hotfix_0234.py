@@ -4,7 +4,7 @@ from artin_sentinel.akdb import reconcile_operational_profile_key, ptz_capabilit
 
 
 def test_release_0234():
-    assert __version__ == "0.2.92"
+    assert __version__ == "0.2.93"
 
 
 def test_stale_generic_x3_profile_reconciles_for_ptz():
