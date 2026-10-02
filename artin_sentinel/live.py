@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from urllib.parse import parse_qs, quote, urlparse, urlunparse
 
 from .xm_dvrip import DvripSession, DvripError
+from .media_process import terminate_media_process
 
 
 FRAME_WIDTH = 640
@@ -971,6 +972,10 @@ class LiveStreamSession:
         self.status: queue.Queue[str] = queue.Queue(maxsize=8)
         self.diagnostics: queue.Queue[str] = queue.Queue(maxsize=32)
         self._stop = threading.Event()
+        self._finished = threading.Event()
+        self._process_lock = threading.Lock()
+        self.current_state = "idle"
+        self._authentication_failure = threading.Event()
         self._thread: threading.Thread | None = None
         self._process: subprocess.Popen | None = None
         self.active_profile = self.profile_name
@@ -1051,36 +1056,57 @@ class LiveStreamSession:
                 self._process = None
         return False, last_error
 
+    @property
+    def finished(self) -> bool:
+        return self._finished.is_set()
+
+    def wait_closed(self, timeout: float = 1.0) -> bool:
+        return self._finished.wait(max(0.0, timeout))
+
+    def _adopt_process(self, process) -> bool:
+        with self._process_lock:
+            if not self._stop.is_set():
+                self._process = process
+                return True
+        terminate_media_process(process)
+        return False
+
     def start(self) -> None:
-        if self._thread and self._thread.is_alive():
+        # Sessions belong to one opening of one tile. A closed session cannot
+        # clear cancellation and resurrect a worker; callers create a new one.
+        if self._stop.is_set() or (self._thread and self._thread.is_alive()):
             return
-        self._stop.clear()
-        self._thread = threading.Thread(target=self._run, name="sentinel-live", daemon=True)
+        self._finished.clear()
+        self.current_state = "connecting"
+        self._thread = threading.Thread(target=self._run_wrapper, name="sentinel-live", daemon=True)
         self._thread.start()
 
+    def _run_wrapper(self) -> None:
+        try:
+            self._run()
+        finally:
+            terminate_media_process(self._process)
+            self._process = None
+            if self._stop.is_set():
+                self.current_state = "stopped"
+            self._finished.set()
+
     def stop(self) -> None:
-        self._stop.set()
-        proc = self._process
-        if proc is not None and proc.poll() is None:
-            try:
-                proc.terminate()
-            except OSError:
-                pass
+        with self._process_lock:
+            self._stop.set()
+            proc = self._process
+        self.current_state = "stopped"
+        terminate_media_process(proc, grace=0.2)
         thread = self._thread
-        # Never let a decoder shutdown stall the Qt thread for ~1.5 s. RTSP
-        # readers can be blocked in pipe I/O even after terminate(); give them a
-        # short grace period, then kill and return control to the interface.
-        if thread and thread.is_alive():
-            thread.join(timeout=0.30)
-        proc = self._process
-        if proc is not None and proc.poll() is None:
-            try:
-                proc.kill()
-            except OSError:
-                pass
-        if thread and thread.is_alive():
+        if thread and thread is not threading.current_thread() and thread.is_alive():
             thread.join(timeout=0.15)
-        self._process = None
+        if thread is None:
+            self._finished.set()
+        while not self.frames.empty():
+            try:
+                self.frames.get_nowait()
+            except queue.Empty:
+                break
 
     def latest_frame(self) -> FramePacket | None:
         latest = None
@@ -1137,6 +1163,9 @@ class LiveStreamSession:
                     return
 
     def _push_frame(self, frame: FramePacket) -> None:
+        if self._stop.is_set():
+            return
+        self.current_state = "playing"
         while True:
             try:
                 self.frames.put_nowait(frame)
@@ -1193,6 +1222,9 @@ class LiveStreamSession:
                 line = raw.decode("utf-8", "replace").strip()
                 if line:
                     lowered = line.lower()
+                    if "401 unauthorized" in lowered or "server returned 401" in lowered or "403 forbidden" in lowered:
+                        self._authentication_failure.set()
+                        self.current_state = "authentication"
                     network_reason = _network_failure_reason(line)
                     if network_reason:
                         if not self._network_failure.is_set():
@@ -1216,6 +1248,9 @@ class LiveStreamSession:
             self._push_diag(f"leitor de diagnóstico: {type(exc).__name__}: {exc}")
 
     def _attempt_profile(self, url: str, profile: str, transport: str = "tcp") -> bool:
+        if self._stop.is_set():
+            return False
+        self.current_state = "connecting"
         self._network_failure.clear()
         self._network_failure_detail = ""
         self.attempts += 1
@@ -1224,6 +1259,8 @@ class LiveStreamSession:
         self._push_status(f"Conectando • {profile} • {transport_label}")
         self._push_diag(f"Tentativa {self.attempts}: iniciando {profile} via {transport_label}")
         got_frame = False
+        proc = None
+        stderr_thread = None
         try:
             proc = subprocess.Popen(
                 self._command(url, transport),
@@ -1234,15 +1271,17 @@ class LiveStreamSession:
                 close_fds=True,
                 env=os.environ.copy(),
             )
-            self._process = proc
+            if not self._adopt_process(proc):
+                return False
             assert proc.stdout is not None
             if proc.stderr is not None:
-                threading.Thread(
+                stderr_thread = threading.Thread(
                     target=self._stderr_reader,
                     args=(proc.stderr, profile),
                     name="sentinel-live-stderr",
                     daemon=True,
-                ).start()
+                )
+                stderr_thread.start()
             while not self._stop.is_set():
                 raw = self._read_exact(proc.stdout, FRAME_SIZE, self._stop)
                 if len(raw) != FRAME_SIZE:
@@ -1256,16 +1295,9 @@ class LiveStreamSession:
         except (OSError, ValueError) as exc:
             self._push_diag(f"{profile}: falha ao iniciar decoder: {type(exc).__name__}: {exc}")
         finally:
-            proc = self._process
-            if proc is not None and proc.poll() is None:
-                try:
-                    proc.terminate()
-                    proc.wait(timeout=0.5)
-                except Exception:
-                    try:
-                        proc.kill()
-                    except OSError:
-                        pass
+            terminate_media_process(proc)
+            if stderr_thread is not None:
+                stderr_thread.join(timeout=0.2)
             self._process = None
         if not got_frame:
             self._push_diag(f"{profile}: nenhum frame recebido")
@@ -1273,6 +1305,7 @@ class LiveStreamSession:
 
     def _run(self) -> None:
         if not self.decoder_available:
+            self.current_state = "unavailable"
             self._push_status("FFmpeg não encontrado")
             self._push_diag("FFmpeg não encontrado no PATH")
             return
@@ -1286,24 +1319,29 @@ class LiveStreamSession:
 
             # Socket/routing failures affect every stream on the same host. Do
             # not waste time cycling TCP/UDP or Main/Sub in that condition.
-            if not got and not network_problem and self.transport_fallback and not self._stop.is_set() and not self._fatal_decoder_error.is_set():
+            if not got and not network_problem and self.transport_fallback and not self._stop.is_set() and not self._fatal_decoder_error.is_set() and not self._authentication_failure.is_set():
                 self._push_status(f"Transporte TCP sem vídeo • tentando UDP")
                 self._push_diag(f"{self.profile_name}: TCP não entregou frames; tentando UDP antes de trocar o perfil")
                 got = self._attempt_profile(self.url, self.profile_name, "udp")
                 network_problem = bool((not got) and self._network_failure.is_set())
             if self._stop.is_set():
                 break
+            if self._authentication_failure.is_set():
+                self.current_state = "authentication"
+                self._push_status("Falha de autenticação • verifique a credencial")
+                break
             if self._fatal_decoder_error.is_set():
+                self.current_state = "unavailable"
                 self._push_status("FFmpeg incompatível • veja Diagnóstico")
                 self._push_diag("Live View interrompido: o FFmpeg rejeitou uma opção de linha de comando; evitando tentativas em loop.")
                 break
 
-            if not got and not network_problem and self.fallback_url:
+            if not got and not network_problem and self.fallback_url and not self._authentication_failure.is_set():
                 self._push_status(f"Fallback → {self.fallback_name}")
                 self._push_diag(f"{self.profile_name} falhou; tentando fallback {self.fallback_name}")
                 got = self._attempt_profile(self.fallback_url, self.fallback_name, "tcp")
                 network_problem = bool((not got) and self._network_failure.is_set())
-                if not got and not network_problem and self.transport_fallback and not self._stop.is_set() and not self._fatal_decoder_error.is_set():
+                if not got and not network_problem and self.transport_fallback and not self._stop.is_set() and not self._fatal_decoder_error.is_set() and not self._authentication_failure.is_set():
                     self._push_diag(f"{self.fallback_name}: TCP não entregou frames; tentando UDP")
                     got = self._attempt_profile(self.fallback_url, self.fallback_name, "udp")
                     network_problem = bool((not got) and self._network_failure.is_set())
@@ -1324,9 +1362,14 @@ class LiveStreamSession:
                 self._push_diag(
                     f"Conectividade: {reason}; ciclo RTSP abreviado. Nova tentativa em {int(delay)} s com o perfil principal."
                 )
+                self.current_state = "retrying"
                 self._stop.wait(delay)
                 continue
 
+            if self._authentication_failure.is_set():
+                self.current_state = "authentication"
+                self._push_status("Falha de autenticação • verifique a credencial")
+                break
             network_failures = 0
             if got:
                 if self.playback:
@@ -1343,6 +1386,7 @@ class LiveStreamSession:
                     and not self.ever_had_frame
                     and consecutive_failures >= self.stop_after_initial_failures
                 ):
+                    self.current_state = "unavailable"
                     self._push_status("Stream não validado • reconexão parada")
                     self._push_diag(
                         f"Nenhum frame após {consecutive_failures} ciclo(s); reconexão automática interrompida para evitar loop contínuo."
@@ -1353,8 +1397,9 @@ class LiveStreamSession:
                 elif consecutive_failures <= 6:
                     delay = 5.0
                 else:
-                    delay = 10.0
+                    delay = 30.0
                 self._push_status(f"Sem vídeo • nova tentativa em {int(delay)} s")
+            self.current_state = "retrying"
             self._stop.wait(delay)
 
 
@@ -1422,6 +1467,9 @@ class DvripLiveStreamSession(LiveStreamSession):
         super().stop()
 
     def _attempt_profile(self, url: str, profile: str, transport: str = "tcp") -> bool:
+        if self._stop.is_set():
+            return False
+        self.current_state = "connecting"
         self._network_failure.clear()
         self._network_failure_detail = ""
         self.attempts += 1
@@ -1431,13 +1479,23 @@ class DvripLiveStreamSession(LiveStreamSession):
         got_frame = False
         proc = None
         session = None
+        feeder_thread = stderr_thread = None
         feeder_done = threading.Event()
         feeder_error: list[str] = []
         try:
             host, port, channel, subtype = self._dvrip_target(url)
             session = DvripSession(host, self.username, self.password, port=port, timeout=3.0)
             self._dvrip_session = session
-            session.connect(); session.login(); session.monitor_claim(channel, subtype); session.monitor_start(channel, subtype)
+            session.connect()
+            if self._stop.is_set():
+                return False
+            session.login()
+            if self._stop.is_set():
+                return False
+            session.monitor_claim(channel, subtype)
+            if self._stop.is_set():
+                return False
+            session.monitor_start(channel, subtype)
 
             codec = ""
             first_packet: tuple[int, bytes] | None = None
@@ -1463,13 +1521,15 @@ class DvripLiveStreamSession(LiveStreamSession):
                 self._dvrip_decoder_command(codec), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 bufsize=0, close_fds=True, env=os.environ.copy(),
             )
-            self._process = proc
+            if not self._adopt_process(proc):
+                return False
             assert proc.stdin is not None and proc.stdout is not None
             if proc.stderr is not None:
-                threading.Thread(
+                stderr_thread = threading.Thread(
                     target=self._stderr_reader, args=(proc.stderr, profile),
                     name="sentinel-dvrip-stderr", daemon=True,
-                ).start()
+                )
+                stderr_thread.start()
 
             def feed() -> None:
                 pending = [first_packet]
@@ -1496,7 +1556,8 @@ class DvripLiveStreamSession(LiveStreamSession):
                         pass
                     feeder_done.set()
 
-            threading.Thread(target=feed, name="sentinel-dvrip-feed", daemon=True).start()
+            feeder_thread = threading.Thread(target=feed, name="sentinel-dvrip-feed", daemon=True)
+            feeder_thread.start()
 
             while not self._stop.is_set():
                 raw = self._read_exact(proc.stdout, FRAME_SIZE, self._stop)
@@ -1523,14 +1584,10 @@ class DvripLiveStreamSession(LiveStreamSession):
                 except Exception:
                     pass
             self._dvrip_session = None
-            if proc is not None and proc.poll() is None:
-                try:
-                    proc.terminate(); proc.wait(timeout=0.5)
-                except Exception:
-                    try:
-                        proc.kill()
-                    except OSError:
-                        pass
+            terminate_media_process(proc)
+            for helper in (feeder_thread, stderr_thread):
+                if helper is not None:
+                    helper.join(timeout=0.2)
             self._process = None
         if not got_frame:
             self._push_diag(f"{profile}: nenhum frame DVRIP recebido")
