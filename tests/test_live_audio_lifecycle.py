@@ -120,3 +120,13 @@ def test_live_diagnostics_redact_known_plain_and_encoded_credentials(kind):
         session._push_diag(message)
     text = ' '.join(session.drain_diagnostics())
     assert 'secret' not in text and 'user' not in text and 'pw@' not in text
+
+
+@pytest.mark.parametrize('state,label', [
+    ('no_audio', 'SEM ÁUDIO'), ('unsupported_codec', 'ÁUDIO INDISPONÍVEL'),
+    ('authentication', 'FALHA DE AUTENTICAÇÃO'), ('retrying', 'RECUPERANDO'),
+])
+def test_audio_current_state_exposes_specific_operational_label(state, label):
+    session = live.LiveAudioSession('rtsp://camera/main')
+    session._set_state(state)
+    assert session.current_state_text() == label

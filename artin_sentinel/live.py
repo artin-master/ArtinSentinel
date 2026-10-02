@@ -557,7 +557,11 @@ class LiveAudioSession:
             return "ABRINDO" + (f" • {self.current_detail}" if self.current_detail else "")
         if self.current_state == "retrying":
             return "RECUPERANDO" + (f" • {self.current_detail}" if self.current_detail else "")
-        if self.current_state in {"error", "unavailable", "no_audio", "unsupported_codec", "authentication"}:
+        labels = {"no_audio": "SEM ÁUDIO", "unsupported_codec": "ÁUDIO INDISPONÍVEL",
+                  "authentication": "FALHA DE AUTENTICAÇÃO", "unavailable": "ÁUDIO INDISPONÍVEL"}
+        if self.current_state in labels:
+            return labels[self.current_state] + (f" • {self.current_detail}" if self.current_detail else "")
+        if self.current_state == "error":
             return "FALHA" + (f" • {self.current_detail}" if self.current_detail else "")
         if self.current_state == "stopped":
             return "DESLIGADO"
@@ -1014,7 +1018,8 @@ class LiveAudioSession:
         if self._stop.is_set():
             return
         if saw_track:
-            detail = "Falha na saída de áudio local" + (f" • {last_error}" if last_error else "")
+            detail = ("Áudio indisponível • codec não suportado" if unsupported_codec else
+                      "Falha na saída de áudio local") + (f" • {last_error}" if last_error else "")
             self._set_state("unsupported_codec" if unsupported_codec else "error", detail)
             self._push(self.status, detail)
         else:
@@ -1323,6 +1328,8 @@ class LiveStreamSession:
             descriptor = stream.fileno()
         except (AttributeError, OSError, ValueError):
             descriptor = None
+        if os.name != "posix":
+            descriptor = None  # Windows select does not accept subprocess pipes.
         deadline = time.monotonic() + max(0.01, float(inactivity_timeout))
         buf = bytearray()
         while len(buf) < size and not stop_event.is_set():
