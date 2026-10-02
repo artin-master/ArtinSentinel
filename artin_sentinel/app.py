@@ -1321,6 +1321,8 @@ class DetachedMonitorWindow(QMainWindow):
         self.source_tree.expandAll()
 
     def rebuild_grid(self, count: int):
+        if self._individual_fullscreen_tile is not None:
+            self._exit_camera_fullscreen()
         existing = {t.index: dict(t.source) for t in self.video_tiles if t.source}
         self.stop_all()
         while self.grid.count():
@@ -1421,6 +1423,8 @@ class DetachedMonitorWindow(QMainWindow):
         for s in vals: s.stop()
         self.stop_audio()
     def _sync_stream_visibility(self):
+        if getattr(self, "_closed", False):
+            return
         hidden = not self.isVisible() or self.isMinimized()
         if hidden and not self._streams_suspended:
             self._streams_suspended = True
@@ -1654,6 +1658,7 @@ class DetachedMonitorWindow(QMainWindow):
         self.db.save_live_window(self.site_id,self.window_key,self.windowTitle(),screen,{"x":g.x(),"y":g.y(),"w":g.width(),"h":g.height()},len(self.video_tiles) or 4,slots,self.isFullScreen(),True)
 
     def closeEvent(self,event):
+        self._closed = True
         self.visibility_timer.stop()
         self.save_state(); self.stop_all(); self.poll_timer.stop()
         if not getattr(self.controller, "_closing_app", False):
@@ -2644,10 +2649,12 @@ class MainWindow(QMainWindow):
         self.save_live_workspace()
 
     def stop_tile_stream(self, tile: VideoTile):
+        tile._stream_generation = getattr(tile, "_stream_generation", 0) + 1
         target = getattr(self, "_ptz_hold_target", None)
         if target and target["source_key"][0] == tile.index:
             self.stop_selected_ptz_hold()
         if self.talkback_tile_index == tile.index:
+            self._talkback_resume_audio = False
             self.stop_talkback()
         self.mic_traces.pop(tile.index, None)
         session = self.live_sessions.pop(tile.index, None)
@@ -2657,6 +2664,7 @@ class MainWindow(QMainWindow):
             self.stop_live_audio()
 
     def stop_all_live_streams(self):
+        self._talkback_resume_audio = False
         if getattr(self, "_ptz_active_direction", ""):
             self.stop_selected_ptz_hold()
         self.stop_talkback()
@@ -2672,6 +2680,7 @@ class MainWindow(QMainWindow):
         existing_by_index = {tile.index: dict(tile.source) for tile in self.video_tiles if tile.source}
         overflow = [idx for idx in existing_by_index if idx >= count]
         self.stop_all_live_streams()
+        self._focus_return_state = None
         while self.video_grid.count():
             item = self.video_grid.takeAt(0)
             widget = item.widget()
@@ -2775,7 +2784,13 @@ class MainWindow(QMainWindow):
         )
         if target is None:
             return
+        self.stop_selected_ptz_hold()
+        self._audio_resume_generation = getattr(self, "_audio_resume_generation", 0) + 1
         a, b = source_tile.index, target.index
+        if self.talkback_tile_index == a:
+            self.talkback_tile_index = b
+        elif self.talkback_tile_index == b:
+            self.talkback_tile_index = a
         source_tile.swap_content_with(target)
         sa = self.live_sessions.pop(a, None); sb = self.live_sessions.pop(b, None)
         if sa is not None:
@@ -2930,6 +2945,9 @@ class MainWindow(QMainWindow):
         self.stop_all_live_streams()
         for tile in self.video_tiles:
             tile.clear_source()
+        if self._focus_return_state is not None:
+            self._focus_return_state = None
+            self._restore_video_grid_geometry()
         self.save_live_workspace()
 
     def refresh_source_tree(self, sites, devices):
@@ -3508,7 +3526,12 @@ class MainWindow(QMainWindow):
                 if self._talkback_resume_audio and old_idx is not None and 0 <= old_idx < len(self.video_tiles):
                     self._talkback_resume_audio = False
                     resume_delay = max(180, int(getattr(talk, "resume_delay_ms", 180) or 180))
-                    QTimer.singleShot(resume_delay, lambda t=self.video_tiles[old_idx]: self.toggle_tile_audio(t))
+                    tile = self.video_tiles[old_idx]
+                    generation = getattr(tile, "_stream_generation", 0)
+                    audio_generation = getattr(self, "_audio_resume_generation", 0)
+                    source = dict(tile.source or {})
+                    QTimer.singleShot(resume_delay, lambda: self._resume_audio_after_talkback(
+                        tile, source, generation, audio_generation))
                 else:
                     self._talkback_resume_audio = False
                 self.refresh_selected_audio_controls()
@@ -4147,6 +4170,7 @@ class MainWindow(QMainWindow):
         self.bottom_audio.setToolTip(f"Áudio de escuta: {identity}" + (f" — {detail}" if detail else ""))
 
     def stop_live_audio(self):
+        self._audio_resume_generation = getattr(self, "_audio_resume_generation", 0) + 1
         session = self.live_audio_session
         self.live_audio_session = None
         old_index = self.live_audio_tile_index
@@ -4164,7 +4188,18 @@ class MainWindow(QMainWindow):
         self._set_live_audio_bar("off")
         self.refresh_selected_audio_controls()
 
+    def _resume_audio_after_talkback(self, tile, source, generation, audio_generation):
+        if (getattr(self, "_closing_app", False) or tile not in self.video_tiles
+                or not source or tile.source != source
+                or getattr(tile, "_stream_generation", 0) != generation
+                or getattr(self, "_audio_resume_generation", 0) != audio_generation
+                or self.talkback_session is not None or self.live_audio_session is not None):
+            return
+        self.toggle_tile_audio(tile)
+
     def toggle_tile_audio(self, tile: VideoTile):
+        if getattr(self, "_closing_app", False) or tile not in self.video_tiles or not tile.source:
+            return
         if self.live_audio_tile_index == tile.index and self.live_audio_session is not None:
             self.stop_live_audio()
             return
@@ -4599,9 +4634,7 @@ class MainWindow(QMainWindow):
 
     def pause_tile_reconnect(self, tile: VideoTile):
         """Stop the live worker but keep source identity/diagnostics visible."""
-        session = self.live_sessions.pop(tile.index, None)
-        if session is not None:
-            session.stop()
+        self.stop_tile_stream(tile)
         if tile.source:
             tile.footer.setText("Reconexão pausada • botão direito para reabrir")
             self.live_diag_lines.setdefault(tile.index, []).append(
@@ -4624,11 +4657,7 @@ class MainWindow(QMainWindow):
         self.live_diag_panel.setPlainText("Este canal ainda não está aberto no mosaico. Abra-o para coletar diagnóstico do Live View.")
 
     def remove_tile_source(self, tile: VideoTile):
-        self.stop_tile_stream(tile)
-        tile.clear_source()
-        self.live_diag_lines.pop(tile.index, None)
-        self.save_live_workspace()
-        self.refresh_live_diagnostic_panel()
+        self.close_tile_source(tile)
 
     def change_tile_stream(self, tile: VideoTile, mode: str):
         if not tile.source or tile.source.get("type") != "channel":
