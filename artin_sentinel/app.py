@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import os
 import json
+import shutil
 import faulthandler
 from datetime import datetime, timedelta
 import threading
@@ -87,6 +88,8 @@ from .talkback import (
     XmDvripTalkbackSession, IntelbrasHttpTalkbackSession, IntelbrasNetSDKTalkbackSession, MicrophoneInput, AudioInputPreferences,
     discover_microphone_inputs, ffmpeg_microphone_inputs, probe_microphone_level,
     load_audio_input_preferences, save_audio_input_preferences,
+    IMPLEMENTED_TALKBACK_PROTOCOLS, TALKBACK_REASONS, talkback_transport,
+    talkback_capability_status, talkback_start_readiness,
 )
 from .intelbras_netsdk import (
     runtime_info as intelbras_netsdk_runtime_info, install_from_official_archive,
@@ -625,7 +628,6 @@ def channel_audio_info(device, channel) -> dict:
         profile_key == "intelbras-imx-c"
         and route_kind == "direct"
     )
-    netsdk_direct_ready = bool(netsdk_direct_candidate and netsdk_info.available)
     raw_ports = metadata.get("open_ports") if isinstance(metadata, dict) else []
     open_ports = [int(p) for p in (raw_ports or []) if str(p).isdigit()]
     netsdk_ports = [p for p in (37777, 37778, 34567) if p in open_ports]
@@ -650,11 +652,7 @@ def channel_audio_info(device, channel) -> dict:
         talkback_scope = "primary"
 
     scope_ok = channel_matches_capability_scope(channel, talkback_scope)
-    operational_talkback_protocols = {
-        "xm-dvrip-g711a-experimental",
-        "intelbras-http-postaudio-experimental",
-        "intelbras-netsdk-talk-experimental",
-    }
+    operational_talkback_protocols = IMPLEMENTED_TALKBACK_PROTOCOLS
     protocol_ready = bool(
         talkback_protocol in operational_talkback_protocols
         and (talkback_protocol != "intelbras-netsdk-talk-experimental" or netsdk_info.available)
@@ -663,11 +661,15 @@ def channel_audio_info(device, channel) -> dict:
         (known_mode == "bidirectional" or netsdk_direct_candidate or (http_post_audio_ready and route_kind == "direct"))
         and not protocol_ready
     )
-    can_talk = bool(
-        scope_ok and protocol_ready
-        and (netsdk_direct_ready or (http_post_audio_ready and route_kind == "direct")
-             or mode == "bidirectional" or known_mode == "bidirectional")
+    talkback_state = talkback_capability_status(
+        talkback_protocol, scope_ok=scope_ok,
+        evidence=bool(netsdk_direct_candidate or http_post_audio_ready
+                      or mode == "bidirectional" or known_mode == "bidirectional"),
+        route_kind=route_kind, netsdk_available=bool(netsdk_info.available),
     )
+    can_talk = talkback_state == "ready"
+    talkback_pending = talkback_pending or (scope_ok and talkback_state in {"recorder_route", "runtime_missing"})
+    transport_info = talkback_transport(talkback_protocol)
     label_parts = []
     if codec:
         label_parts.append(codec.upper() + (f" {rate} Hz" if rate else ""))
@@ -693,6 +695,9 @@ def channel_audio_info(device, channel) -> dict:
         "talkback_pending": talkback_pending and scope_ok,
         "label": " • ".join(label_parts),
         "talkback_protocol": talkback_protocol,
+        "talkback_state": talkback_state,
+        "talkback_reason": TALKBACK_REASONS[talkback_state],
+        "talkback_transport_label": transport_info.label if transport_info else "Não implementado",
         "talkback_scope": talkback_scope,
         "talkback_validation": talkback_validation,
         "talkback_base_url": http_base_url if http_post_audio_ready else "",
@@ -3709,8 +3714,12 @@ class MainWindow(QMainWindow):
             self.listen_audio_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaVolume))
             self.listen_audio_btn.setToolTip("Áudio não confirmado para a seleção")
             self.audio_volume_slider.setEnabled(False)
-            self.talkback_btn.setEnabled(False)
-            self.talkback_btn.hide()
+            talk_running = self.talkback_session is not None
+            self.talkback_btn.setEnabled(talk_running)
+            self.talkback_btn.setVisible(talk_running)
+            self.talkback_btn.setChecked(talk_running)
+            self.talkback_btn.setText("PARAR" if talk_running else "MIC")
+            self.talkback_btn.setToolTip("Parar a sessão de microfone ativa" if talk_running else "Áudio não confirmado")
             if hasattr(self, "microphone_row"):
                 self.microphone_row.hide()
             if hasattr(self, "microphone_test_btn"):
@@ -3723,7 +3732,7 @@ class MainWindow(QMainWindow):
             self.audio_capability_label.hide()
             self.mic_progress_label.hide()
             if hasattr(self, "audio_section"):
-                self.audio_section.hide()
+                self.audio_section.setVisible(talk_running)
             return
         _device, _channel, info, _url = ctx
         can_listen = bool(info["can_listen"] or info.get("can_probe_listen"))
@@ -3776,13 +3785,11 @@ class MainWindow(QMainWindow):
         else:
             self.listen_audio_btn.setToolTip("Verificar e ouvir áudio desta janela")
         self.audio_volume_slider.setEnabled(can_listen)
-        mic_ok = bool(self.microphone_inputs) and bool(self.microphone_scan_complete)
+        capture_available = bool(shutil.which("ffmpeg"))
+        mic_ok = bool(self.microphone_inputs) and bool(self.microphone_scan_complete) and capture_available
         if can_talk and not self.microphone_scan_complete and self.microphone_scan_future is None:
             self.refresh_microphone_inputs_async()
-        talk_running = bool(
-            can_talk and self.talkback_session is not None
-            and self.talkback_tile_index == (tile.index if tile is not None else None)
-        )
+        talk_running = self.talkback_session is not None
         self.talkback_btn.blockSignals(True)
         self.talkback_btn.setChecked(talk_running)
         if talk_running:
@@ -3794,8 +3801,8 @@ class MainWindow(QMainWindow):
         else:
             self.talkback_btn.setText("MIC")
         self.talkback_btn.blockSignals(False)
-        self.talkback_btn.setEnabled(can_talk and (mic_ok or talk_running))
-        self.talkback_btn.setVisible(can_talk or talkback_pending)
+        self.talkback_btn.setEnabled(talk_running or (can_talk and mic_ok))
+        self.talkback_btn.setVisible(can_talk or talkback_pending or talk_running)
         if talkback_pending and not can_talk:
             self.talkback_btn.setStyleSheet(
                 "QToolButton{color:#e4c887;background:#2a2417;border:1px solid #665329;border-radius:6px;"
@@ -3808,7 +3815,11 @@ class MainWindow(QMainWindow):
         if hasattr(self, "microphone_test_btn"):
             testing = self.microphone_test_future is not None and not self.microphone_test_future.done()
             self.microphone_test_btn.setEnabled(can_talk and mic_ok and not testing and self.talkback_session is None)
-        if can_talk and not self.microphone_scan_complete:
+        if talk_running:
+            talk_tip = "Parar a sessão de microfone ativa"
+        elif can_talk and not capture_available:
+            talk_tip = "FFmpeg não disponível para capturar o microfone local"
+        elif can_talk and not self.microphone_scan_complete:
             talk_tip = "Detectando microfone local em background…"
         elif can_talk and not mic_ok:
             talk_tip = "Microfone local Pulse/PipeWire ou ALSA não disponível"
@@ -3829,7 +3840,7 @@ class MainWindow(QMainWindow):
             if pending_protocol.startswith("intelbras-netsdk") and netsdk_detail:
                 talk_tip = f"MIC indisponível • NetSDK Intelbras não pronto: {netsdk_detail} • importe em Configuração → Atualizações"
             else:
-                talk_tip = "MIC indisponível neste canal • retorno local ainda não homologado para este caminho"
+                talk_tip = "MIC indisponível neste canal • " + str(info.get("talkback_reason") or "retorno local ainda não homologado para este caminho")
         else:
             talk_tip = "Push-to-Talk não homologado"
         self.talkback_btn.setToolTip(talk_tip)
@@ -3839,7 +3850,7 @@ class MainWindow(QMainWindow):
             mic = self._selected_microphone_input()
             mic_name = mic.label if mic else ("detectando microfone…" if not self.microphone_scan_complete else "sem microfone")
             validation_text = "experimental" if talkback_validation == "experimental" else "disponível"
-            if not self.microphone_scan_complete:
+            if not self.microphone_scan_complete and capture_available:
                 self.audio_capability_label.setStyleSheet(
                     "color:#aebfb7;background:#111b17;border:1px solid #283a32;border-radius:6px;padding:4px 6px;font-size:9px"
                 )
@@ -3848,7 +3859,10 @@ class MainWindow(QMainWindow):
                 self.audio_capability_label.setStyleSheet(
                     "color:#e4c887;background:#241f13;border:1px solid #5a4926;border-radius:6px;padding:4px 6px;font-size:9px;font-weight:700"
                 )
-                self.audio_capability_label.setText("MIC INDISPONÍVEL • nenhum microfone local detectado")
+                self.audio_capability_label.setText(
+                    "MIC INDISPONÍVEL • nenhum microfone local detectado" if capture_available
+                    else "MIC INDISPONÍVEL • FFmpeg não disponível para captura"
+                )
             else:
                 self.audio_capability_label.setStyleSheet(
                     "color:#78a991;background:transparent;border:0;padding:3px 1px;font-size:9px"
@@ -3875,7 +3889,7 @@ class MainWindow(QMainWindow):
         else:
             self.audio_capability_label.hide()
         if hasattr(self, "audio_section"):
-            self.audio_section.setVisible(can_listen or can_talk or talkback_pending)
+            self.audio_section.setVisible(can_listen or can_talk or talkback_pending or talk_running)
         trace = self.mic_traces.get(tile.index) if tile else None
         self.mic_progress_label.setVisible(trace is not None)
         if trace is not None:
@@ -4203,26 +4217,16 @@ class MainWindow(QMainWindow):
         if not ctx:
             return
         device, _channel, info, _urls, protocol = ctx
-        if not info.get("can_talk"):
-            return
-        if protocol not in {"xm-dvrip-g711a-experimental", "intelbras-http-postaudio-experimental", "intelbras-netsdk-talk-experimental"}:
-            QMessageBox.information(
-                self, "Push-to-Talk",
-                "O equipamento anuncia áudio bidirecional, mas o transporte de retorno ainda não foi implementado para este provider.",
-            )
-            return
         microphone = self._selected_microphone_input()
-        if microphone is None:
-            if not self.microphone_scan_complete:
-                self.refresh_microphone_inputs_async()
-                detail = "A detecção do microfone ainda está em andamento. Tente novamente em instantes."
-            else:
-                detail = "Nenhuma entrada Pulse/PipeWire ou ALSA compatível foi encontrada."
-            QMessageBox.information(self, "Push-to-Talk", detail)
-            return
         credentials = self._credentials_for_device(int(device["id"]))
-        if not credentials:
-            QMessageBox.information(self, "Push-to-Talk", "Configure a credencial do equipamento antes de usar o microfone.")
+        readiness = talkback_start_readiness(
+            info, microphone=microphone, scan_complete=self.microphone_scan_complete,
+            credentials=credentials, ffmpeg_available=bool(shutil.which("ffmpeg")),
+        )
+        if not readiness.ready:
+            if readiness.code == "microphone_scanning":
+                self.refresh_microphone_inputs_async()
+            QMessageBox.information(self, "Push-to-Talk", readiness.detail)
             return
         username, password = credentials
         self._talkback_resume_audio = bool(self.live_audio_tile_index == tile.index and self.live_audio_session is not None)
@@ -4310,25 +4314,13 @@ class MainWindow(QMainWindow):
         if not ctx:
             return
         device, _channel, info, _url, protocol = ctx
-        if protocol == "xm-dvrip-g711a-experimental":
-            QMessageBox.information(
-                self, "Push-to-Talk",
-                f"{device['name']}: Push-to-Talk experimental disponível por DVRIP/Sofia G.711 A-law. "
-                "Use o botão MIC no painel lateral: um clique inicia e outro clique encerra. A sessão possui limite automático de segurança.",
-            )
-            return
-        if protocol == "intelbras-http-postaudio-experimental":
-            QMessageBox.information(
-                self, "Push-to-Talk",
-                f"{device['name']}: Push-to-Talk experimental disponível pela HTTP API oficial Intelbras (postAudio), "
-                "em G.711 A-law. A saída de áudio foi declarada pelo próprio firmware no probe somente leitura. "
-                "Use MIC para iniciar/parar; o mapeamento entre saída de áudio e canal de vídeo ainda está em validação de campo.",
-            )
-            return
-        if not info["can_talk"]:
-            QMessageBox.information(self, "Push-to-Talk", "Este equipamento ainda não possui transporte de áudio de retorno homologado.")
-            return
-        QMessageBox.information(self, "Push-to-Talk", f"Capacidade bidirecional detectada, porém provider de retorno ainda pendente: {protocol or 'não identificado'}.")
+        detail = str(info.get("talkback_reason") or TALKBACK_REASONS["no_capability"])
+        if info.get("can_talk"):
+            transport = talkback_transport(protocol)
+            label = transport.label if transport else "não implementado"
+            detail = (f"{device['name']} • {label} • experimental. " + detail
+                      + " Use MIC para iniciar/parar. A sessão possui limite automático de segurança.")
+        QMessageBox.information(self, "Push-to-Talk", detail)
 
     def show_selected_talkback_info(self):
         if self.selected_video_tile is not None:

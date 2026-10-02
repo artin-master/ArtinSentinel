@@ -25,16 +25,109 @@ import shutil
 import subprocess
 import threading
 import time
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote, quote_plus
 from urllib.request import parse_http_list, parse_keqv_list
 
 from . import __version__
+from .log_viewer import sanitize_log_text
 from .intelbras_http import API_VERSION_PATH, POST_AUDIO_PATH, query_talkback_buffer_empty
 from .intelbras_netsdk import (
     IntelbrasNetSDK, NetSDKUnavailable, TalkFormat, DH_TALK_PCM, DH_TALK_G711A,
     EM_DEV_PROTOCOL_V3, runtime_info as netsdk_runtime_info, reference_audio_path,
 )
 from .xm_dvrip import DvripSession, DvripError
+
+
+@dataclass(frozen=True, slots=True)
+class TalkbackTransport:
+    protocol: str
+    label: str
+    requires_netsdk: bool = False
+    experimental: bool = True
+
+
+# These are implemented local routes, not manufacturer-wide compatibility.
+TALKBACK_TRANSPORTS = (
+    TalkbackTransport("xm-dvrip-g711a-experimental", "DVRIP/Sofia G.711 A-law"),
+    TalkbackTransport("intelbras-http-postaudio-experimental", "Intelbras HTTP postAudio/G.711 A-law"),
+    TalkbackTransport("intelbras-netsdk-talk-experimental", "Intelbras NetSDK", requires_netsdk=True),
+)
+IMPLEMENTED_TALKBACK_PROTOCOLS = frozenset(item.protocol for item in TALKBACK_TRANSPORTS)
+
+
+def talkback_transport(protocol: str) -> TalkbackTransport | None:
+    return next((item for item in TALKBACK_TRANSPORTS if item.protocol == protocol), None)
+
+
+TALKBACK_REASONS = {
+    "no_capability": "Retorno de áudio não confirmado para este equipamento.",
+    "wrong_channel": "Retorno de áudio não disponível nesta lente/canal.",
+    "recorder_route": "A saída de áudio do equipamento não confirma retorno para uma câmera atrás do gravador.",
+    "transport_unimplemented": "O transporte local de retorno ainda não está implementado/homologado.",
+    "runtime_missing": "O runtime oficial Intelbras NetSDK não está disponível; importe em Configuração → Atualizações.",
+    "ready": "Transporte experimental disponível; saída física de áudio ainda exige validação em campo.",
+}
+
+
+def talkback_capability_status(protocol: str, *, scope_ok: bool, evidence: bool,
+                               route_kind: str, netsdk_available: bool = False) -> str:
+    if not scope_ok:
+        return "wrong_channel"
+    if not evidence:
+        return "no_capability"
+    transport = talkback_transport(protocol)
+    if transport is None:
+        return "transport_unimplemented"
+    if route_kind != "direct":
+        return "recorder_route"
+    if transport.requires_netsdk and not netsdk_available:
+        return "runtime_missing"
+    return "ready"
+
+
+@dataclass(frozen=True, slots=True)
+class TalkbackReadiness:
+    code: str
+    detail: str
+
+    @property
+    def ready(self) -> bool:
+        return self.code == "ready"
+
+
+def talkback_start_readiness(info: dict, *, microphone, scan_complete: bool,
+                             credentials, ffmpeg_available: bool) -> TalkbackReadiness:
+    """GUI-safe preflight; no device IO or multimedia enumeration here."""
+    if not info.get("can_talk"):
+        state = str(info.get("talkback_state") or "no_capability")
+        return TalkbackReadiness(state, TALKBACK_REASONS.get(state, TALKBACK_REASONS["no_capability"]))
+    if talkback_transport(str(info.get("talkback_protocol") or "")) is None:
+        return TalkbackReadiness("transport_unimplemented", TALKBACK_REASONS["transport_unimplemented"])
+    if not ffmpeg_available:
+        return TalkbackReadiness("ffmpeg_missing", "FFmpeg não disponível para capturar o microfone local.")
+    if not scan_complete:
+        return TalkbackReadiness("microphone_scanning", "A detecção do microfone está em andamento. Tente novamente em instantes.")
+    if microphone is None:
+        return TalkbackReadiness("microphone_missing", "Nenhuma entrada Pulse/PipeWire ou ALSA compatível foi encontrada.")
+    if not credentials:
+        return TalkbackReadiness("credentials_missing", "Configure a credencial do equipamento antes de usar o microfone.")
+    return TalkbackReadiness("ready", TALKBACK_REASONS["ready"])
+
+
+def sanitize_talkback_diagnostic(text: object, username: str = "", password: str = "") -> str:
+    """Redact known secrets even when an exception echoes them without a URL."""
+    value = sanitize_log_text(text)
+    value = re.sub(r"(?i)((?:https?|rtsps?)://)[^/@\s]+@", r"\1<oculto>@", value)
+    for secret in (username, password):
+        if not secret:
+            continue
+        for candidate in sorted({secret, quote(secret, safe=""), quote_plus(secret, safe="")}, key=len, reverse=True):
+            if len(candidate) >= 3:
+                value = value.replace(candidate, "<oculto>")
+            else:
+                value = re.sub(r"(?<![\w])" + re.escape(candidate) + r"(?![\w])", "<oculto>", value)
+    value = re.sub(r"(?i)(\bsess[aã]o\s+)(?:0x[0-9a-f]+|[0-9a-f]{8,})\b", r"\1<oculto>", value)
+    return value.strip()
 
 
 @dataclass(frozen=True, slots=True)
@@ -341,7 +434,7 @@ class XmDvripTalkbackSession:
         return bool(shutil.which("ffmpeg") and self.microphone_backend in {"pulse", "alsa"})
 
     def _push(self, q: queue.Queue[str], text: str) -> None:
-        text = str(text or "").strip()
+        text = sanitize_talkback_diagnostic(text, self.username, self.password)
         if not text:
             return
         while True:
@@ -752,7 +845,7 @@ class IntelbrasHttpTalkbackSession:
         return bool(shutil.which('ffmpeg') and self.microphone_backend in {'pulse', 'alsa'})
 
     def _push(self, q: queue.Queue[str], text: str) -> None:
-        text = str(text or '').strip()
+        text = sanitize_talkback_diagnostic(text, self.username, self.password)
         if not text:
             return
         while True:
@@ -1120,7 +1213,7 @@ class IntelbrasNetSDKTalkbackSession:
         return bool(netsdk_runtime_info().available and shutil.which("ffmpeg"))
 
     def _push(self, q: queue.Queue[str], text: str) -> None:
-        text = str(text or "").strip()
+        text = sanitize_talkback_diagnostic(text, self.username, self.password)
         if not text:
             return
         while True:
