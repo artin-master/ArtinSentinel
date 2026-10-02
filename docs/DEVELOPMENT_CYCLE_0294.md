@@ -1,9 +1,9 @@
-# Ciclo funcional 0.2.94 — Live View e áudio resilientes
+# Artin Sentinel 0.2.94 — Live View Resilience & Audio Controls
 
-Ciclo de desenvolvimento sobre a versão oficial **0.2.93**. A versão interna
-continua 0.2.93; este documento não prepara uma release nem declara nova
-compatibilidade. A validação física da base anterior não substitui os testes
-físicos destas alterações.
+Registro final do ciclo funcional 0.2.94. A versão interna deste checkout é
+0.2.94. O ciclo não declara protocolos novos nem homologação além das
+observações físicas descritas abaixo. A investigação de eventos, detecção, luz
+e sirene da IT-Blue não faz parte desta release e permanece para um ciclo futuro.
 
 ## Alterações implementadas
 
@@ -39,11 +39,22 @@ físicos destas alterações.
 - Encerramento cancela timers e novas aberturas, mantém referências às sessões
   até a limpeza e aguarda os workers num prazo compartilhado. Processos filhos
   são terminados, mortos se necessário, aguardados e têm os pipes fechados.
+- Volume de escuta usa curva perceptual; 0% permanece mudo e 100% mantém o
+  máximo normal. O ganho MIC é independente, ajustável entre 50% e 200%, com
+  100% sem alteração do nível original, limitador antes da codificação, valor
+  visível, reset para 100% e botão “Testar”.
+- O controle de zoom duplicado foi removido do inspector; zoom no quadrante e
+  capability do backend permanecem. Linhas Áudio/Microfone, seleção de
+  dispositivo e modo NetSDK/PTT se adaptam a larguras menores; o hotfix MiboCam
+  mantém os controles contidos no painel.
+- A interface registra estado/diagnóstico sanitizado por canal. Logs e estados
+  não incluem credenciais nem conteúdo de áudio/vídeo.
 
-Não foram alterados versão, schema, Publisher, updater, sistema de releases,
-capabilities por inferência ou a organização da tela Equipamentos. Falhas locais
-no Live View não criam novos alertas persistidos nem removem canais; o histórico
-existente de saúde permanece sob responsabilidade do monitor.
+Durante o ciclo funcional não foram alterados schema, Publisher, updater,
+capabilities por inferência ou a organização da tela Equipamentos. A versão só
+foi avançada nesta preparação oficial da release. Falhas locais no Live View
+não criam novos alertas persistidos nem removem canais; o histórico existente
+de saúde permanece sob responsabilidade do monitor.
 
 ## Validação automatizada
 
@@ -54,29 +65,38 @@ Regressões novas em:
 - `tests/test_live_audio_lifecycle.py`
 - `tests/test_talkback_lifecycle.py`
 - `tests/test_media_shutdown.py`
+- `tests/test_live_audio_controls_qt.py`
 
 Cobrem callbacks tardios, troca de canal/grade, maximizar/restaurar/fechar,
 fechamento durante conexão/retry/captura, Stop repetido, cancelamento de volume,
 backoff, encerramento da aplicação e processos filhos reais sem equipamento.
-Resultado final: **663 coletados, 663 aprovados, 0 falhas, 0 erros e 0 skipped**.
-São 69 regressões novas. Os 594 testes anteriores são preservados sem alteração.
-A suíte completa foi executada com Qt offscreen, dados isolados em `/tmp` e
-permissão para os servidores HTTP/TLS loopback dos testes existentes.
+Incluem curva/ganho independentes, controles de percentual/reset/mudo e contenção
+do inspector em larguras reduzidas. Resultado final da preparação da release:
+**682 coletados, 682 aprovados, 0 falhas, 0 erros e 0 skipped**. A suíte foi
+executada com Qt offscreen, dados isolados em `/tmp` e permissão para os
+servidores HTTP/TLS loopback dos testes existentes.
 
 ## Limites que exigem teste físico
 
-Nenhum teste físico deste novo ciclo foi registrado nesta rodada. Identificação
-de codec/faixa, aceitação de bytes e limpeza dos objetos não provam áudio audível,
-estabilidade contínua ou parada mecânica. Uma chamada bloqueada dentro do NetSDK
-não pode ser abortada à força com segurança; seu retorno e o Stop/logout real
-precisam ser observados com o runtime e firmware disponíveis. A espera de shutdown
-pelos workers usa um orçamento compartilhado de quatro segundos, além da
-limpeza dos processos filhos, e não declara que qualquer chamada nativa retorna
-nesse prazo. Não se inventou watchdog/timeout proprietário de DVRIP.
+As builds de campo do ciclo foram instaladas nos equipamentos disponíveis. Os
+controles Áudio/Microfone foram verificados visualmente; IT-Blue foi usada para
+testes de vídeo, áudio/talkback e estabilidade; MiboCam foi usada para validar o
+layout e os controles específicos de NetSDK/talkback. Esses testes não homologam
+protocolos experimentais: o talkback IT-Blue permanece experimental e modos B/C
+da MiboCam não são declarados homologados. A investigação local de eventos,
+detecção, luz e sirene IT-Blue ficou fora do ciclo.
+
+Identificação de codec/faixa e limpeza dos objetos não provam áudio audível em
+todo cenário nem parada mecânica. Uma chamada bloqueada dentro do NetSDK não
+pode ser abortada à força com segurança; retorno e Stop/logout reais dependem do
+runtime e firmware. A espera de shutdown usa orçamento compartilhado de quatro
+segundos, além da limpeza dos processos filhos, e não declara que qualquer
+chamada nativa retorna nesse prazo. Não se inventou watchdog/timeout proprietário
+de DVRIP.
 
 **Hikvision permanece pendente de validação física específica por falta de
-equipamento**, inclusive para as alterações deste ciclo. Não se declara
-homologação Hikvision com base na suíte automatizada.
+equipamento** nesta rodada. Não se declara homologação Hikvision com base na
+suíte automatizada.
 
 ## Roteiro curto de campo
 

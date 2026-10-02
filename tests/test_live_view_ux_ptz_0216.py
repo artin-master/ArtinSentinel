@@ -5,7 +5,7 @@ from artin_sentinel import __version__
 
 
 def test_release_version_0216():
-    assert __version__ == "0.2.93"
+    assert __version__ == "0.2.94"
 
 
 def test_compact_toolbar_and_contextual_inspector_are_present():

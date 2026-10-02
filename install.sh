@@ -7,7 +7,7 @@ BIN="$HOME/.local/bin"
 APPS="$HOME/.local/share/applications"
 ICONS="$HOME/.local/share/icons/hicolor/512x512/apps"
 DATA="$HOME/.local/share/artin-sentinel"
-NEW_VERSION="0.2.93"
+NEW_VERSION="0.2.94"
 PREV_VERSION=""
 
 CHECK_ONLY=0

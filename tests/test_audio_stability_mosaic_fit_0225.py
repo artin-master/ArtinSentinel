@@ -10,7 +10,7 @@ from artin_akdb import CORE_REVISION, record_by_legacy_key
 
 
 def test_release_0225_and_akdb_talkback_is_conservative():
-    assert __version__ == "0.2.93"
+    assert __version__ == "0.2.94"
     assert CORE_REVISION >= 7
     audio = audio_capability(profile_key="it-blue-x3-we2q")
     assert audio["mode"] == "bidirectional"

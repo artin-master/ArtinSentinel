@@ -1,3 +1,14 @@
+# Artin Sentinel 0.2.94 — Live View Resilience & Audio Controls
+
+- **Live View:** fechar uma câmera maximizada restaura o mosaico e recriar a grade limpa também os tiles ocultos. Callbacks atrasados e sessões canceladas não reabrem canais fechados. Watchdog detecta decoder ativo sem frames e recupera somente o canal afetado, com backoff e pausa retomável após falhas repetidas.
+- Encerrar o aplicativo cancela retries/timers e aguarda a limpeza de workers, players e processos de mídia. Uma falha em um canal não reinicia os demais.
+- **Áudio de escuta:** curva perceptual torna níveis baixos e médios mais utilizáveis; 0% permanece mudo e 100% mantém o máximo normal. Trocas de canal/Main/Sub aguardam a limpeza do player anterior, e a interface mostra rótulo e percentual atualizados.
+- **Microfone/talkback:** ganho independente ajustável entre 50% e 200%; 100% preserva o nível original e o limitador protege contra picos antes da codificação. O percentual, reset para 100% e botão “Testar” ficam visíveis. Stop continua associado à sessão/canal original após trocar a seleção; diagnósticos permanecem sanitizados.
+- **UX:** removido o zoom duplicado do inspector; o zoom no quadrante e a capability do backend foram preservados. As linhas Áudio/Microfone se adaptam a larguras menores; seletor NetSDK e nomes longos permanecem dentro do painel.
+- IT-Blue continua no caminho DVRIP/Sofia; MiboCam iMX-C continua no NetSDK. Os modos B/C da MiboCam não são declarados homologados e não foram anunciados protocolos novos. Capacidades podem depender de validação física por modelo.
+- **Validação de campo:** controles Áudio/Microfone foram conferidos visualmente; IT-Blue foi usada em vídeo, áudio/talkback e estabilidade; MiboCam foi usada no layout e controles NetSDK/talkback. Hikvision não foi validado fisicamente por indisponibilidade do equipamento e continua pendente. A investigação de eventos/detecção/luz/sirene da IT-Blue não faz parte desta versão.
+- A suíte automatizada e a consistência entre as fontes de versão acompanham a release.
+
 # Artin Sentinel 0.2.93 — PTZ, Stream Diagnostics & Channel Health
 
 - PTZ usa capabilities e providers comprovados, evita inferências genéricas, preserva alvo, direção e velocidade originais para Stop, encerra o movimento ao trocar/fechar a seleção e descarta resultados atrasados associados a outra seleção.
