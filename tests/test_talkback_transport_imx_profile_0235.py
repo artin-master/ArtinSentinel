@@ -10,7 +10,7 @@ from artin_akdb import CORE_REVISION, record_by_legacy_key
 
 
 def test_release_0235_and_core_revision():
-    assert __version__ == "0.2.91"
+    assert __version__ == "0.2.92"
     assert CORE_REVISION >= 12
 
 

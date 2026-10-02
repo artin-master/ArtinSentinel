@@ -38,8 +38,8 @@ def _manifest(package_url: str, sha256: str, size: int = 0, version: str = "0.2.
 
 
 def test_version_0227_and_version_ordering():
-    assert __version__ == "0.2.91"
-    assert is_newer("0.2.92", __version__)
+    assert __version__ == "0.2.92"
+    assert is_newer("0.2.93", __version__)
     assert not is_newer(__version__, __version__)
     assert not is_newer("0.2.61", __version__)
     assert not is_newer("0.2.30", __version__)

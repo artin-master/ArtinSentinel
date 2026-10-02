@@ -1,12 +1,17 @@
-RELEASE_TITLE = "Configuração legível e equipamentos incluídos"
+RELEASE_TITLE = "Acesso Web confirmado e gestão de equipamentos"
 RELEASE_NOTES = [
-    "Atualizações ganhou rolagem vertical para preservar o tamanho dos campos em telas menores.",
-    "A descoberta mantém equipamentos cadastrados na lista e identifica cada um como * Incluído.",
-    "Canais e Excluir ficam disponíveis diretamente para o equipamento incluído selecionado.",
+    "A descoberta confirma serviços HTTP/HTTPS e conserva o histórico de confirmações e falhas por endpoint.",
+    "A ação Web exige confirmação real e permite escolher entre serviços; URLs abertas não levam credenciais.",
+    "Configuração → Equipamentos separa visualmente equipamentos cadastrados e dispositivos localizados.",
+    "Canais e Excluir da descoberta ficam agrupados no menu Mais.",
+    "O cadastro manual preserva os campos em caso de erro e o contador informa os equipamentos visíveis pelo filtro.",
+    "A suíte automatizada e a verificação de consistência da versão acompanham a release.",
 ]
-CHANGELOG_TEXT = """Artin Sentinel 0.2.91 — Configuração e descoberta
+CHANGELOG_TEXT = """Artin Sentinel 0.2.92 — Acesso Web confirmado e gestão de equipamentos
 
-- Rolagem na aba Atualizações e espaço mínimo para as notas.
-- Equipamentos incluídos permanecem visíveis na descoberta, com marca e ações contextuais.
-- A inclusão não remove a linha e não cria novo cadastro para equipamento já conhecido.
+- HTTP e HTTPS são sondados separadamente; as confirmações e falhas ficam no histórico do endpoint.
+- A interface Web só abre após resposta HTTP confirmada. Serviços múltiplos podem ser selecionados sem levar credenciais na URL.
+- A tela Equipamentos separa os cadastrados dos dispositivos descobertos, com ações agrupadas junto de cada tabela.
+- O formulário manual conserva os valores em erros de validação; o contador do filtro informa quantos equipamentos estão visíveis.
+- A suíte automatizada e a verificação das fontes oficiais de versão acompanham a release.
 """

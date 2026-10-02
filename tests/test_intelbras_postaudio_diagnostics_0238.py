@@ -7,7 +7,7 @@ from artin_sentinel.talkback import _format_postaudio_payload
 
 
 def test_release_0238():
-    assert __version__ == "0.2.91"
+    assert __version__ == "0.2.92"
 
 
 def test_post_audio_path_supports_vendor_framing_modes():

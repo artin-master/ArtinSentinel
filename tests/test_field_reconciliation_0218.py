@@ -9,7 +9,7 @@ from artin_sentinel.xm_dvrip import dvrip_ptz_command
 
 
 def test_release_version_0218():
-    assert __version__ == "0.2.91"
+    assert __version__ == "0.2.92"
 
 
 def test_itblue_horizontal_mapping_is_field_corrected():

@@ -7,7 +7,7 @@ from artin_sentinel import __version__
 
 
 def test_release_0224():
-    assert __version__ == "0.2.91"
+    assert __version__ == "0.2.92"
 
 
 def test_audio_slider_has_real_gain_above_unity():

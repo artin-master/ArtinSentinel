@@ -1,6 +1,8 @@
-# Artin Sentinel 0.2.91 — Configuração e descoberta
+# Artin Sentinel 0.2.92 — Acesso Web confirmado e gestão de equipamentos
 
-Em Equipamentos → Buscar / atualizar → Detalhes da busca, a varredura distingue endereços avaliados, hosts com serviços, possíveis CFTV, outros hosts e equipamentos já conhecidos/ignorados. Marca HTTP ou porta 8000 isolada não bastam para chamar um modem/AP de CFTV; RTSP na porta 554 é candidato sem classificação automática como câmera. A coluna Evidência mostra as razões da identidade AKDB.
+Esta versão confirma serviços Web por respostas HTTP/HTTPS e mantém o histórico de sucessos e falhas por endpoint. A ação Web só abre serviços confirmados; URLs legadas e portas TCP abertas, sozinhas, não contam como confirmação. Quando há vários serviços, o operador escolhe entre HTTP e HTTPS sem incluir credenciais no endereço. A tela Configuração → Equipamentos separa visualmente os cadastrados dos dispositivos localizados. O cadastro manual preserva os campos quando há erros e a tabela mostra quantos equipamentos correspondem ao filtro. A suíte automatizada e as verificações de consistência da versão fazem parte do projeto.
+
+Em **Configuração → Equipamentos**, o Site ativo fica no topo; equipamentos cadastrados e dispositivos localizados aparecem em seções separadas. Na descoberta, **Canais** e **Excluir** ficam no menu **Mais**. A varredura distingue endereços avaliados, hosts com serviços, possíveis CFTV, outros hosts e equipamentos já conhecidos/ignorados. Marca HTTP ou porta 8000 isolada não bastam para chamar um modem/AP de CFTV; RTSP na porta 554 é candidato sem classificação automática como câmera. A coluna Evidência mostra as razões da identidade AKDB.
 
 Registros oficiais novos da AKDB compartilhada com domínio Sentinel entram na identificação de modelos. A identificação ainda exige evidência forte e preserva overrides manuais. Serviços genéricos e registros apenas de outros apps não tornam um host câmera automaticamente. Valide em uma rede real antes de considerar a regra homologada.
 

@@ -9,7 +9,7 @@ from artin_sentinel.providers import HikvisionProvider, IntelbrasProvider
 
 
 def test_release_is_0213():
-    assert __version__ == "0.2.91"
+    assert __version__ == "0.2.92"
 
 
 def test_intelbras_vipc_1230_d_g2_profile_is_specific():
