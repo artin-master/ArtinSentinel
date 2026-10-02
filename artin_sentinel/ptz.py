@@ -269,11 +269,13 @@ def pulse_move_provider(
         raise ValueError("Backend PTZ indisponível")
     if backend == "dvrip":
         from .xm_dvrip import dvrip_ptz_start, dvrip_ptz_stop
-        dvrip_ptz_start(ip, username, password, direction, speed)
-        sleep(max(0.08, min(float(duration), 1.0)))
         try:
-            dvrip_ptz_stop(ip, username, password, direction, speed)
-        except Exception:
-            pass
+            dvrip_ptz_start(ip, username, password, direction, speed)
+            sleep(max(0.08, min(float(duration), 1.0)))
+        finally:
+            try:
+                dvrip_ptz_stop(ip, username, password, direction, speed)
+            except Exception:
+                pass
         return f"PTZ DVRIP/XM: {direction}"
     return pulse_move(ip, username, password, onvif_url, direction, speed, duration)

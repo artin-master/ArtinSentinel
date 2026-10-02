@@ -2553,7 +2553,7 @@ class MainWindow(QMainWindow):
         self.ptz_speed_slider.setRange(10, 100)
         self.ptz_speed_slider.setValue(45)
         self.ptz_speed_slider.setEnabled(False)
-        self.ptz_speed_slider.setToolTip("Velocidade do movimento PTZ")
+        self.ptz_speed_slider.setToolTip("Velocidade do movimento PTZ • aplicada no próximo movimento")
         speed_row.addWidget(self.ptz_speed_slider, 1)
         self.ptz_speed_value = QLabel("45%")
         self.ptz_speed_value.setObjectName("PtzSpeedValue")
@@ -2644,6 +2644,9 @@ class MainWindow(QMainWindow):
         self.save_live_workspace()
 
     def stop_tile_stream(self, tile: VideoTile):
+        target = getattr(self, "_ptz_hold_target", None)
+        if target and target["source_key"][0] == tile.index:
+            self.stop_selected_ptz_hold()
         if self.talkback_tile_index == tile.index:
             self.stop_talkback()
         self.mic_traces.pop(tile.index, None)
@@ -3802,7 +3805,10 @@ class MainWindow(QMainWindow):
             self.talkback_btn.setText("MIC")
         self.talkback_btn.blockSignals(False)
         self.talkback_btn.setEnabled(talk_running or (can_talk and mic_ok))
-        self.talkback_btn.setVisible(can_talk or talkback_pending or talk_running)
+        self.talkback_btn.setVisible(can_talk or talkback_pending)
+        if talk_running:
+            # An active session must remain stoppable after capability loss.
+            self.talkback_btn.show()
         if talkback_pending and not can_talk:
             self.talkback_btn.setStyleSheet(
                 "QToolButton{color:#e4c887;background:#2a2417;border:1px solid #665329;border-radius:6px;"
@@ -3900,7 +3906,7 @@ class MainWindow(QMainWindow):
             return None
         device = self.db.get_device(int(tile.source.get("device_id", 0)))
         channel = self.db.get_recorder_channel(int(tile.source.get("channel_id", 0)))
-        if not device or not channel:
+        if not device or not channel or int(channel["device_id"]) != int(device["id"]):
             return None
         profile_key = self._selected_device_profile_key(device)
         model_text = f"{device['manufacturer']} {device['model']} {device['detected_model']} {device['name']}".lower()
@@ -3967,6 +3973,8 @@ class MainWindow(QMainWindow):
             elif mode == "recorder-mediated":
                 text = "PTZ via gravador detectado; controle direto ainda não habilitado."
                 badge = "PTZ via gravador"
+        if not enabled and getattr(self, "_ptz_active_direction", ""):
+            self.stop_selected_ptz_hold()
         for key, btn in self.ptz_buttons.items():
             if key in {"zoom-in", "zoom-out"}:
                 btn.setEnabled(zoom_enabled)
@@ -4000,6 +4008,7 @@ class MainWindow(QMainWindow):
             "onvif_url": str(device["onvif_url"] or ""), "backend": str(known.get("backend") or ""),
             "speed": max(0.10, min(self.ptz_speed_slider.value() / 100.0, 1.0)),
             "name": str(device["name"] or device["ip"]), "direction": direction,
+            "source_key": (tile.index, int(device["id"]), int(tile.source.get("channel_id", 0))),
         }
 
     def _submit_ptz(self, action: str, direction: str = "", *, quiet: bool = False, target=None):
@@ -4011,6 +4020,7 @@ class MainWindow(QMainWindow):
         # Worker threads consume only captured values, never widgets/selection.
         values = {key: target[key] for key in ("ip", "username", "password", "onvif_url", "speed", "backend")}
         name = target["name"]
+        source_key = target["source_key"]
         direction = direction or target["direction"]
         if not quiet:
             self.ptz_status_label.setText("Parando PTZ…" if action == "stop" else f"Movendo: {direction}")
@@ -4026,10 +4036,10 @@ class MainWindow(QMainWindow):
                     message = start_move_provider(**values, direction=direction)
                 else:
                     message = pulse_move_provider(**values, direction=direction)
-                self.ptz_results.put((True, name, message, action))
+                self.ptz_results.put((True, name, message, action, source_key))
             except Exception as exc:
                 # Transport exceptions can contain URLs/credentials.
-                self.ptz_results.put((False, name, type(exc).__name__, action))
+                self.ptz_results.put((False, name, type(exc).__name__, action, source_key))
         self.ptz_executor.submit(run)
         return True
 
@@ -4042,6 +4052,7 @@ class MainWindow(QMainWindow):
         if not target:
             return
         self._ptz_hold_target = target
+        self._ptz_last_target = target
         self._ptz_active_direction = direction
         self._ptz_last_direction = direction
         self._submit_ptz("start", direction, target=target)
@@ -4054,6 +4065,12 @@ class MainWindow(QMainWindow):
 
     def stop_selected_ptz_hold(self):
         target = getattr(self, "_ptz_hold_target", None)
+        if target is None:
+            target = self._ptz_target_for_selected()
+            previous = getattr(self, "_ptz_last_target", None)
+            if target and previous and target["source_key"] == previous["source_key"]:
+                # DVRIP Stop repeats the original direction/step, including retry.
+                target = previous
         self._ptz_active_direction = ""
         self._ptz_hold_target = None
         if hasattr(self, "ptz_hold_timer"):
@@ -4070,11 +4087,16 @@ class MainWindow(QMainWindow):
     def poll_ptz_results(self):
         while True:
             try:
-                ok, name, message, action = self.ptz_results.get_nowait()
+                ok, name, message, action, source_key = self.ptz_results.get_nowait()
             except Empty:
                 break
             if action == "start":
                 self._ptz_command_pending = False
+            tile = self.selected_video_tile
+            source = tile.source if tile and tile.source else {}
+            selected_key = (tile.index if tile else -1, int(source.get("device_id", 0)), int(source.get("channel_id", 0)))
+            if selected_key != source_key:
+                continue
             if not ok and action == "start" and getattr(self, "_ptz_active_direction", ""):
                 self.stop_selected_ptz_hold()
             if ok:
