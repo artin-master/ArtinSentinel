@@ -28,8 +28,12 @@ def test_listening_curve_is_independent_monotonic_muted_and_keeps_ceiling():
     gains = [live.audio_gain_for_slider(value) for value in range(101)]
     assert gains[0] == 0.0
     assert all(left <= right for left, right in zip(gains, gains[1:]))
-    assert 0 < gains[10] < gains[20]
+    assert 0.02 < gains[10] < 0.05
+    assert 0.08 < gains[20] < 0.15
+    assert 0.2 < gains[30] < 0.3
+    assert 0.5 < gains[50] < 0.65
     assert gains[20] < gains[30] < gains[50] < gains[80]
+    assert 1.2 < gains[80] < 1.5
     assert gains[100] == 2.0
     assert live.audio_filter_for_slider(0) == "volume=0.000"
     source = Path("artin_sentinel/app.py").read_text(encoding="utf-8")

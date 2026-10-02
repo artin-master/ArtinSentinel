@@ -370,7 +370,7 @@ def audio_gain_for_slider(value: int) -> float:
         return 0.0
     # A power curve provides audible low settings and a smooth rise through
     # the middle of the control. The 100% endpoint remains the old 2x maximum.
-    return 2.0 * (value / 100.0) ** 2.5
+    return 2.0 * (value / 100.0) ** 1.8
 
 
 def audio_filter_for_slider(value: int) -> str:
