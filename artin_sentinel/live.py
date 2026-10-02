@@ -773,7 +773,7 @@ class LiveAudioSession:
     def wait_closed(self, timeout: float = 1.0) -> bool:
         deadline = time.monotonic() + max(0.0, timeout)
         finished = self._finished.wait(max(0.0, deadline - time.monotonic()))
-        for worker in (self._volume_thread, self._volume_attach_thread, self._reaper_thread):
+        for worker in (self._thread, self._volume_thread, self._volume_attach_thread, self._reaper_thread):
             if worker is not None and worker is not threading.current_thread():
                 worker.join(max(0.0, deadline - time.monotonic()))
                 finished = finished and not worker.is_alive()
@@ -1158,7 +1158,12 @@ class LiveStreamSession:
         return self._finished.is_set()
 
     def wait_closed(self, timeout: float = 1.0) -> bool:
-        return self._finished.wait(max(0.0, timeout))
+        deadline = time.monotonic() + max(0.0, timeout)
+        finished = self._finished.wait(max(0.0, deadline - time.monotonic()))
+        if self._thread is not None and self._thread is not threading.current_thread():
+            self._thread.join(max(0.0, deadline - time.monotonic()))
+            finished = finished and not self._thread.is_alive()
+        return finished
 
     def _adopt_process(self, process) -> bool:
         with self._process_lock:

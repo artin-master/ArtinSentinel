@@ -401,7 +401,7 @@ class _CaptureLifecycle:
     def wait_closed(self, timeout: float = 1.0) -> bool:
         deadline = time.monotonic() + max(0.0, timeout)
         finished = self._finished.wait(max(0.0, deadline - time.monotonic()))
-        for name in ("_capture_reaper", "_stop_reaper", "_buffer_probe_thread"):
+        for name in ("_thread", "_capture_reaper", "_stop_reaper", "_buffer_probe_thread"):
             worker = getattr(self, name, None)
             if worker is not None and worker is not threading.current_thread():
                 worker.join(max(0.0, deadline - time.monotonic()))
@@ -416,16 +416,16 @@ class _CaptureLifecycle:
         terminate_media_process(process)
         return False
 
-    def _request_stop(self) -> None:
+    def _request_stop(self):
         with self._process_lock:
             repeated = self._stop.is_set()
             self._stop.set()
             process = self._process
         if not repeated:
             self._push(self.status, "Encerrando talkback…")
-            self._stop_reaper = _terminate_process_nonblocking(process)
         if self._thread is None and process is None:
             self._finished.set()
+        return not repeated, process
 
 
 class XmDvripTalkbackSession(_CaptureLifecycle):
@@ -518,7 +518,9 @@ class XmDvripTalkbackSession(_CaptureLifecycle):
         clean OPTalk Stop. Terminating FFmpeg wakes the microphone read quickly;
         the GUI thread never waits or joins.
         """
-        self._request_stop()
+        requested, process = self._request_stop()
+        if requested:
+            self._stop_reaper = _terminate_process_nonblocking(process)
         # Start/Stop cleanup remains in the background worker. Never join here.
 
     def _capture_commands(self) -> list[tuple[str, list[str]]]:
@@ -561,6 +563,13 @@ class XmDvripTalkbackSession(_CaptureLifecycle):
             self._stop.set()
             terminate_media_process(self._process)
             self._process = None
+            for connection in (self._talk_session, self._control_session):
+                if connection is not None:
+                    try:
+                        connection.close()
+                    except Exception:
+                        pass
+            self._talk_session = self._control_session = None
             self._finished.set()
 
     def _run(self) -> None:
@@ -926,7 +935,9 @@ class IntelbrasHttpTalkbackSession(_CaptureLifecycle):
         self._thread.start()
 
     def stop(self) -> None:
-        self._request_stop()
+        requested, process = self._request_stop()
+        if requested:
+            self._stop_reaper = _terminate_process_nonblocking(process)
         conn = self._connection
         if conn is not None:
             try:
@@ -971,6 +982,12 @@ class IntelbrasHttpTalkbackSession(_CaptureLifecycle):
             self._stop.set()
             terminate_media_process(self._process)
             self._process = None
+            if self._connection is not None:
+                try:
+                    self._connection.close()
+                except Exception:
+                    pass
+                self._connection = None
             self._finished.set()
 
     def _start_buffer_probe(self, result_queue: queue.Queue) -> None:
@@ -1317,7 +1334,9 @@ class IntelbrasNetSDKTalkbackSession(_CaptureLifecycle):
         self._thread.start()
 
     def stop(self) -> None:
-        self._request_stop()
+        requested, process = self._request_stop()
+        if requested:
+            self._stop_reaper = _terminate_process_nonblocking(process)
 
     def _capture_commands(self, codec: str = "pcm") -> list[tuple[str, list[str]]]:
         ffmpeg = shutil.which("ffmpeg")
