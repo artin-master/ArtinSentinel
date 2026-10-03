@@ -1414,6 +1414,9 @@ class LiveStreamSession:
             if not chunk:
                 break
             buf.extend(chunk)
+            # This is an inactivity limit, not a total frame-assembly budget.
+            # Slow, progressing native decoders must retain their frame boundary.
+            deadline = time.monotonic() + max(0.01, float(inactivity_timeout))
         return bytes(buf)
 
     def _stderr_reader(self, stream, profile: str) -> None:
