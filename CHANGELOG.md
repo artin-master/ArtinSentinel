@@ -1,3 +1,11 @@
+# Artin Sentinel 0.2.94.1 — Menu Selection UX
+
+- **Menus e submenus:** a opção sob o cursor recebe destaque forte, deixando claro qual ação será executada ao clicar.
+- **Seleção persistente:** opções marcadas/checked usam um estado visual próprio e continuam distinguíveis do simples hover.
+- **Listas suspensas:** QComboBox e respectivas listas usam o mesmo padrão de hover/seleção, com contraste consistente.
+- **Itens desabilitados:** ficam visualmente separados das ações disponíveis, reduzindo interpretação equivocada.
+- Alteração exclusivamente de UX/estilo; não modifica protocolos, descoberta, vídeo, áudio, PTZ, banco ou lógica operacional.
+
 # Artin Sentinel 0.2.94 — Live View Resilience & Audio Controls
 
 - **Live View:** fechar uma câmera maximizada restaura o mosaico e recriar a grade limpa também os tiles ocultos. Callbacks atrasados e sessões canceladas não reabrem canais fechados. Watchdog detecta decoder ativo sem frames e recupera somente o canal afetado, com backoff e pausa retomável após falhas repetidas.

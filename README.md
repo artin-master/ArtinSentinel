@@ -1,4 +1,4 @@
-# Artin Sentinel 0.2.94 — Live View Resilience & Audio Controls
+# Artin Sentinel 0.2.94.1 — Menu Selection UX
 
 Esta versão torna o Live View mais resiliente a fechamento, troca de canal e falhas isoladas de stream; melhora a curva de volume de escuta; e acrescenta controles claros e independentes para volume e ganho de microfone. O ciclo de campo usou os equipamentos disponíveis: IT-Blue para vídeo, áudio/talkback e estabilidade, e MiboCam para o layout e os controles NetSDK/talkback. Recursos experimentais continuam identificados como experimentais. Hikvision não foi validado fisicamente nesta rodada por falta de equipamento e permanece pendente. A investigação de eventos, detecção, luz e sirene da IT-Blue ficou fora desta release.
 

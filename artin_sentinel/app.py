@@ -422,7 +422,85 @@ QLineEdit, QPlainTextEdit, QComboBox {
     border-radius:6px;
     padding:7px;
 }
+
 QComboBox::drop-down { border:0; width:24px; }
+
+/* Menus e listas: hover, seleção persistente e itens desabilitados distintos. */
+QMenu {
+    background:#111e2b;
+    color:#e8f2f5;
+    border:1px solid #355565;
+    border-radius:7px;
+    padding:5px;
+}
+
+QMenu::item {
+    background:transparent;
+    color:#dcebed;
+    padding:7px 30px 7px 10px;
+    margin:1px 2px;
+    border-radius:5px;
+}
+
+QMenu::item:selected {
+    background:#2b6f50;
+    color:#ffffff;
+}
+
+QMenu::item:checked {
+    background:#173c2e;
+    color:#8ce6b5;
+    font-weight:700;
+}
+
+QMenu::item:checked:selected {
+    background:#34845f;
+    color:#ffffff;
+}
+
+QMenu::item:disabled {
+    background:transparent;
+    color:#64767a;
+}
+
+QMenu::separator {
+    height:1px;
+    background:#2b4452;
+    margin:5px 8px;
+}
+
+QMenu::right-arrow {
+    width:8px;
+    height:8px;
+}
+
+QComboBox QAbstractItemView {
+    background:#111e2b;
+    color:#dcebed;
+    border:1px solid #355565;
+    outline:0;
+    selection-background-color:#2b6f50;
+    selection-color:#ffffff;
+}
+
+QComboBox QAbstractItemView::item {
+    min-height:28px;
+    padding:4px 8px;
+}
+
+QComboBox QAbstractItemView::item:hover {
+    background:#2b6f50;
+    color:#ffffff;
+}
+
+QComboBox QAbstractItemView::item:selected {
+    background:#34845f;
+    color:#ffffff;
+}
+
+QComboBox QAbstractItemView::item:disabled {
+    color:#64767a;
+}
 QGroupBox {
     border:1px solid #355565;
     border-radius:8px;
