@@ -1,3 +1,12 @@
+# Artin Sentinel 0.2.95 — Hikvision Playback/Export Hardening
+
+- A busca ISAPI Hikvision passa a reutilizar o mesmo searchID durante a paginação 0/40/80, conforme o contrato de busca da fabricante.
+- Resultados repetidos são deduplicados e páginas anômalas não entram em loop.
+- Erros de autenticação, endpoint ausente, resposta inválida e indisponibilidade recebem mensagens separadas e sanitizadas.
+- playbackURI só é aceito para o track solicitado, sem credenciais embutidas, e é reroteado para o endpoint cadastrado antes de reprodução/exportação.
+- Intelbras, ONVIF genérico e demais providers permanecem inalterados.
+- Candidata pendente de validação física Hikvision.
+
 # Artin Sentinel 0.2.94.1 — Menu Selection UX
 
 - **Menus e submenus:** a opção sob o cursor recebe destaque forte, deixando claro qual ação será executada ao clicar.
