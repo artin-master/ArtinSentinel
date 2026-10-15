@@ -72,6 +72,8 @@ class HikvisionRecording295Test(unittest.TestCase):
         self.assertEqual(ids[0], ids[1])
         self.assertIn("<searchResultPostion>0</searchResultPostion>", bodies[0])
         self.assertIn("<searchResultPostion>40</searchResultPostion>", bodies[1])
+        self.assertIn("<contentType>video</contentType>", bodies[0])
+        self.assertIn("//recordType.meta.std-cgi.com", bodies[0])
 
     @patch("artin_sentinel.hik_recording._local_time")
     def test_search_parses_size_and_deduplicates_repeated_page(self, local_time):
@@ -86,6 +88,21 @@ class HikvisionRecording295Test(unittest.TestCase):
         self.assertEqual(result.recordings[0].size, 98765)
         self.assertTrue(result.warnings)
         self.assertFalse(result.truncated)
+
+    def test_response_status_is_reported_without_private_payload(self):
+        class RejectOpener:
+            def open(self, request, timeout):
+                return FakeResponse(
+                    b"<ResponseStatus><statusString>Invalid XML Content</statusString>"
+                    b"<subStatusCode>badXmlContent</subStatusCode></ResponseStatus>"
+                )
+        with self.assertRaises(RecordingSearchError) as ctx:
+            search_hikvision_recordings(
+                "http://192.0.2.1", "operator", "top-secret", 1,
+                self.start, self.end, opener=RejectOpener(),
+            )
+        self.assertIn("badXmlContent", str(ctx.exception))
+        self.assertNotIn("top-secret", str(ctx.exception))
 
     def test_auth_error_is_sanitized(self):
         with self.assertRaises(RecordingSearchError) as ctx:

@@ -8,7 +8,7 @@ Esta candidata parte diretamente da 0.2.94.1 e mantém a frente Intelbras/NetSDK
 
 O fluxo ISAPI existente usa `POST /ISAPI/ContentMgmt/search`. A documentação Hikvision trata `searchID` como identidade da sessão de busca e `searchResultPostion` como cursor de paginação. A implementação anterior gerava um novo searchID a cada página; firmwares antigos podem interpretar isso como uma nova busca.
 
-A 0.2.95 mantém um único searchID por consulta e avança apenas a posição 0/40/80, com limite de 120 resultados por canal e proteção contra página repetida.
+A 0.2.95 mantém um único searchID por consulta e avança apenas a posição 0/40/80, com limite de 120 resultados por canal e proteção contra página repetida. A requisição também passa a declarar explicitamente conteúdo de vídeo e o descritor genérico de tipo de gravação usado pela família ISAPI, melhorando a compatibilidade com firmwares que não aceitam a busca mínima.
 
 ## Hardening
 

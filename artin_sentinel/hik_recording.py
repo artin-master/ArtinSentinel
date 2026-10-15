@@ -66,6 +66,8 @@ def _build_search_body(search_id: str, track: int, start: datetime, end: datetim
         f"<startTime>{_utc_time(start)}</startTime>"
         f"<endTime>{_utc_time(end)}</endTime>"
         "</timeSpan></timeSpanList>"
+        "<contentTypeList><contentType>video</contentType></contentTypeList>"
+        "<metadataList><metadataDescriptor>//recordType.meta.std-cgi.com</metadataDescriptor></metadataList>"
         f"<maxResults>{_PAGE_SIZE}</maxResults>"
         f"<searchResultPostion>{position}</searchResultPostion>"
         "</CMSearchDescription>"
@@ -140,7 +142,11 @@ def search_hikvision_recordings(
             root = ET.fromstring(data)
         except ET.ParseError as exc:
             raise RecordingSearchError("Resposta de gravações Hikvision inválida") from exc
-        if root.tag.rsplit("}", 1)[-1] != "CMSearchResult":
+        root_name = root.tag.rsplit("}", 1)[-1]
+        if root_name == "ResponseStatus":
+            detail = _safe_status(_child(root, "subStatusCode") or _child(root, "statusString"))
+            raise RecordingSearchError(f"Gravador Hikvision rejeitou a consulta ISAPI ({detail})")
+        if root_name != "CMSearchResult":
             raise RecordingSearchError("Resposta ISAPI não contém resultados de gravação")
 
         status = _child(root, "responseStatusStrg").upper()
