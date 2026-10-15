@@ -1,0 +1,55 @@
+name: Build Sentinel 0.2.95 Hikvision Installer
+
+on:
+  push:
+    branches:
+      - feature/0.2.95-hikvision-playback-export
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout candidate
+        uses: actions/checkout@v4
+
+      - name: Validate candidate version
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fx 'version = "0.2.95"' pyproject.toml
+          grep -Fx '__version__ = "0.2.95"' artin_sentinel/__init__.py
+          grep -Fx 'NEW_VERSION="0.2.95"' install.sh
+          python -m compileall -q artin_sentinel artin_akdb
+
+      - name: Run focused tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[test]'
+          python -m pytest -q             tests/test_hikvision_recording_pilot_0270.py             tests/test_hikvision_recording_0295.py             tests/test_recording_export_0262.py             tests/test_version_consistency.py
+
+      - name: Build normal ZIP installer
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf dist-package
+          mkdir -p dist-package/ArtinSentinel_0.2.95_Hikvision_Playback_Export
+          rsync -a --exclude '.git' --exclude '.github' --exclude '__pycache__' --exclude '*.pyc'             ./ dist-package/ArtinSentinel_0.2.95_Hikvision_Playback_Export/
+          cd dist-package
+          zip -r ../ArtinSentinel_0.2.95_Hikvision_Playback_Export.zip             ArtinSentinel_0.2.95_Hikvision_Playback_Export
+          cd ..
+          sha256sum ArtinSentinel_0.2.95_Hikvision_Playback_Export.zip             > ArtinSentinel_0.2.95_Hikvision_Playback_Export.zip.sha256
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: ArtinSentinel_0.2.95_Hikvision_Playback_Export
+          path: |
+            ArtinSentinel_0.2.95_Hikvision_Playback_Export.zip
+            ArtinSentinel_0.2.95_Hikvision_Playback_Export.zip.sha256
+          if-no-files-found: error
