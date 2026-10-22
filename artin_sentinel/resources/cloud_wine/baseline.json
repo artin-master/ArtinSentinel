@@ -1,0 +1,35 @@
+{
+  "version": "1.25.5.409",
+  "files": [
+    {
+      "name": "libt2u.dll",
+      "bytes": 351232,
+      "sha256": "528b8289c6f59e447c91508790d21abe888ad16ee1b1f6e30a52c4799bbf4d02"
+    },
+    {
+      "name": "Libt2uWrapper.dll",
+      "bytes": 6656,
+      "sha256": "0dbef79ccdc2c0995c46eba337b20bb3d1d4567bb0480f535bfafbbf00aa31a6"
+    },
+    {
+      "name": "SIMNext.Core.dll",
+      "bytes": 391456,
+      "sha256": "6c90f47a36ebaffaf47e8183e1f6177629761ac7d8622316dc08ea7cdc6d2612"
+    },
+    {
+      "name": "SIMNext.Model.dll",
+      "bytes": 373024,
+      "sha256": "2e551cc790593b5661d5faf5520d99da563e46735a3cb9cc8b3fe164206e2881"
+    },
+    {
+      "name": "SIMNext.P2PSDK.dll",
+      "bytes": 72480,
+      "sha256": "233c7dcb4c6f44965a36837cf60a150d0ae176f5cf3eaad47fb6500113a3f1a2"
+    },
+    {
+      "name": "NLog.dll",
+      "bytes": 844288,
+      "sha256": "68936e2536bc04e0815fb9bee4c702adb989447d80b186a769fd68ee9899e13d"
+    }
+  ]
+}

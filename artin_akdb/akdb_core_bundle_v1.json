@@ -1,0 +1,1219 @@
+{
+  "schema": "artin-akdb-bundle-v1",
+  "schema_version": 2,
+  "core_version": "0.2.0",
+  "core_revision": 13,
+  "applications": [
+    "sentinel",
+    "netlens",
+    "rescnow"
+  ],
+  "records": [
+    {
+      "stable_id": "artin.device.intelbras-vipc-1230-d-g2",
+      "manufacturer": "Intelbras",
+      "canonical_type": "camera-fixed",
+      "family": "VIPC",
+      "model": "VIPC 1230 D G2",
+      "variant": "",
+      "subtype": "fixed/bullet",
+      "aliases": [
+        "VIPC-1230-D-G2",
+        "VIPC1230DG2"
+      ],
+      "identifiers": [],
+      "fingerprints": [],
+      "capabilities": [
+        "network-video",
+        "fixed-camera",
+        "dual-stream",
+        "motion-detection",
+        "ir",
+        "poe"
+      ],
+      "protocols": [
+        "rtsp",
+        "onvif"
+      ],
+      "preferred_strategies": [
+        "onvif",
+        "rtsp"
+      ],
+      "avoid_strategies": [
+        "recorder-enumeration"
+      ],
+      "negative_knowledge": [],
+      "validation_status": "documented",
+      "provenance": [
+        "manufacturer-documentation",
+        "onvif-declaration"
+      ],
+      "domains": [
+        "sentinel",
+        "netlens"
+      ],
+      "revision": 2,
+      "legacy_keys": [
+        "intelbras-vipc-1230-d-g2"
+      ],
+      "schema_version": 2,
+      "core_version": "0.2.0",
+      "core_revision": 13
+    },
+    {
+      "stable_id": "artin.device.intelbras-mhdx",
+      "manufacturer": "Intelbras",
+      "canonical_type": "xvr",
+      "family": "MHDX",
+      "model": "MHDX 1004",
+      "variant": "",
+      "subtype": "hybrid-recorder",
+      "aliases": [
+        "MHDX1004"
+      ],
+      "identifiers": [],
+      "fingerprints": [],
+      "capabilities": [
+        "network-video",
+        "hybrid-recorder",
+        "multi-channel",
+        "ip-extra-channel",
+        "four-analog-plus-one-ip"
+      ],
+      "protocols": [
+        "rtsp",
+        "onvif-candidate"
+      ],
+      "preferred_strategies": [
+        "intelbras-recorder",
+        "rtsp",
+        "onvif"
+      ],
+      "avoid_strategies": [],
+      "negative_knowledge": [],
+      "validation_status": "field-validated",
+      "provenance": [
+        "field-test",
+        "intelbras-support-field-documentation"
+      ],
+      "domains": [
+        "sentinel",
+        "netlens"
+      ],
+      "revision": 4,
+      "legacy_keys": [
+        "intelbras-mhdx"
+      ],
+      "schema_version": 2,
+      "core_version": "0.2.0",
+      "core_revision": 13
+    },
+    {
+      "stable_id": "artin.device.intelbras-nvd-1416",
+      "manufacturer": "Intelbras",
+      "canonical_type": "nvr",
+      "family": "NVD",
+      "model": "NVD 1416",
+      "variant": "",
+      "subtype": "",
+      "aliases": [
+        "NVD1416"
+      ],
+      "identifiers": [],
+      "fingerprints": [],
+      "capabilities": [
+        "network-video",
+        "multi-channel"
+      ],
+      "protocols": [
+        "onvif-candidate",
+        "rtsp-candidate"
+      ],
+      "preferred_strategies": [
+        "intelbras-recorder",
+        "rtsp-candidate"
+      ],
+      "avoid_strategies": [],
+      "negative_knowledge": [],
+      "validation_status": "field-detected",
+      "provenance": [
+        "device-information-screen"
+      ],
+      "domains": [
+        "sentinel",
+        "netlens"
+      ],
+      "revision": 1,
+      "legacy_keys": [
+        "intelbras-nvd-1416"
+      ],
+      "schema_version": 2,
+      "core_version": "0.2.0",
+      "core_revision": 13
+    },
+    {
+      "stable_id": "artin.device.intelbras-nvd-1516",
+      "manufacturer": "Intelbras",
+      "canonical_type": "nvr",
+      "family": "NVD",
+      "model": "NVD 1516",
+      "variant": "",
+      "subtype": "",
+      "aliases": [
+        "NVD1516"
+      ],
+      "identifiers": [],
+      "fingerprints": [],
+      "capabilities": [
+        "network-video",
+        "multi-channel"
+      ],
+      "protocols": [
+        "onvif-candidate",
+        "rtsp-candidate"
+      ],
+      "preferred_strategies": [
+        "intelbras-recorder",
+        "rtsp-candidate"
+      ],
+      "avoid_strategies": [],
+      "negative_knowledge": [],
+      "validation_status": "field-detected",
+      "provenance": [
+        "device-information-screen"
+      ],
+      "domains": [
+        "sentinel",
+        "netlens"
+      ],
+      "revision": 1,
+      "legacy_keys": [
+        "intelbras-nvd-1516"
+      ],
+      "schema_version": 2,
+      "core_version": "0.2.0",
+      "core_revision": 13
+    },
+    {
+      "stable_id": "artin.device.intelbras-mhdx-1216",
+      "manufacturer": "Intelbras",
+      "canonical_type": "xvr",
+      "family": "MHDX",
+      "model": "MHDX 1216",
+      "variant": "",
+      "subtype": "",
+      "aliases": [
+        "MHDX1216"
+      ],
+      "identifiers": [],
+      "fingerprints": [],
+      "capabilities": [
+        "network-video",
+        "multi-channel",
+        "hybrid-recorder"
+      ],
+      "protocols": [
+        "onvif-candidate",
+        "rtsp-candidate"
+      ],
+      "preferred_strategies": [
+        "intelbras-recorder",
+        "rtsp-candidate"
+      ],
+      "avoid_strategies": [],
+      "negative_knowledge": [],
+      "validation_status": "field-detected",
+      "provenance": [
+        "device-information-screen"
+      ],
+      "domains": [
+        "sentinel",
+        "netlens"
+      ],
+      "revision": 1,
+      "legacy_keys": [
+        "intelbras-mhdx-1216"
+      ],
+      "schema_version": 2,
+      "core_version": "0.2.0",
+      "core_revision": 13
+    },
+    {
+      "stable_id": "artin.device.intelbras-imx-c",
+      "manufacturer": "Intelbras",
+      "canonical_type": "camera-consumer",
+      "family": "Mibo",
+      "model": "iMX C",
+      "variant": "",
+      "subtype": "consumer/fixed",
+      "aliases": [
+        "iMX C",
+        "iMX-C",
+        "Mibo iMX C"
+      ],
+      "identifiers": [
+        "model:imx-c"
+      ],
+      "fingerprints": [],
+      "capabilities": [
+        "network-video",
+        "consumer-camera",
+        "listen-audio-field-validated",
+        "bidirectional-audio-hardware",
+        "aac-audio"
+      ],
+      "protocols": [
+        "rtsp",
+        "onvif",
+        "intelbras-1-candidate"
+      ],
+      "preferred_strategies": [
+        "rtsp",
+        "onvif",
+        "intelbras-1-candidate"
+      ],
+      "avoid_strategies": [
+        "recorder-enumeration"
+      ],
+      "negative_knowledge": [
+        "talkback-local-transport-not-homologated",
+        "onvif-backchannel-not-assumed"
+      ],
+      "validation_status": "field-validated",
+      "provenance": [
+        "manufacturer-documentation",
+        "field-test",
+        "field-test-video-audio-listen-0.2.32"
+      ],
+      "domains": [
+        "sentinel",
+        "netlens"
+      ],
+      "revision": 1,
+      "legacy_keys": [
+        "intelbras-imx-c"
+      ],
+      "schema_version": 2,
+      "core_version": "0.2.0",
+      "core_revision": 13
+    },
+    {
+      "stable_id": "artin.device.intelbras-mibo",
+      "manufacturer": "Intelbras",
+      "canonical_type": "camera-consumer",
+      "family": "Mibo",
+      "model": "MiboCam family",
+      "variant": "",
+      "subtype": "consumer/fixed",
+      "aliases": [
+        "Mibo",
+        "MiboCam"
+      ],
+      "identifiers": [],
+      "fingerprints": [],
+      "capabilities": [
+        "network-video",
+        "consumer-camera",
+        "listen-audio-field-validated",
+        "bidirectional-audio-candidate"
+      ],
+      "protocols": [
+        "rtsp",
+        "onvif"
+      ],
+      "preferred_strategies": [
+        "onvif",
+        "rtsp"
+      ],
+      "avoid_strategies": [
+        "recorder-enumeration"
+      ],
+      "negative_knowledge": [
+        "talkback-local-transport-not-homologated"
+      ],
+      "validation_status": "field-detected",
+      "provenance": [
+        "field-test",
+        "field-test-video-audio-listen-0.2.32"
+      ],
+      "domains": [
+        "sentinel",
+        "netlens"
+      ],
+      "revision": 3,
+      "legacy_keys": [
+        "intelbras-mibo"
+      ],
+      "schema_version": 2,
+      "core_version": "0.2.0",
+      "core_revision": 13
+    },
+    {
+      "stable_id": "artin.device.hikvision-ds-7216hghi-f1",
+      "manufacturer": "Hikvision",
+      "canonical_type": "dvr",
+      "family": "Turbo HD",
+      "model": "DS-7216HGHI-F1",
+      "variant": "",
+      "subtype": "turbo-hd-recorder",
+      "aliases": [
+        "DS 7216HGHI F1",
+        "7216HGHI"
+      ],
+      "identifiers": [],
+      "fingerprints": [],
+      "capabilities": [
+        "network-video",
+        "hybrid-recorder",
+        "multi-channel",
+        "dual-stream",
+        "recorder-mediated-ptz",
+        "16-analog-inputs",
+        "ip-channel-proxy"
+      ],
+      "protocols": [
+        "rtsp",
+        "hikvision-isapi",
+        "hikvision-service-8000",
+        "onvif-candidate"
+      ],
+      "preferred_strategies": [
+        "hikvision-isapi",
+        "hikvision-recorder-rtsp",
+        "onvif"
+      ],
+      "avoid_strategies": [
+        "generic-camera-scan"
+      ],
+      "negative_knowledge": [
+        "deviceType=IPC-unreliable-for-classification"
+      ],
+      "validation_status": "field-validated",
+      "provenance": [
+        "manufacturer-documentation",
+        "field-test"
+      ],
+      "domains": [
+        "sentinel",
+        "netlens"
+      ],
+      "revision": 3,
+      "legacy_keys": [
+        "hikvision-ds-7216hghi-f1"
+      ],
+      "schema_version": 2,
+      "core_version": "0.2.0",
+      "core_revision": 13
+    },
+    {
+      "stable_id": "artin.device.hikvision-generic",
+      "manufacturer": "Hikvision",
+      "canonical_type": "unknown",
+      "family": "Hikvision",
+      "model": "",
+      "variant": "",
+      "subtype": "",
+      "aliases": [],
+      "identifiers": [],
+      "fingerprints": [],
+      "capabilities": [
+        "network-device"
+      ],
+      "protocols": [
+        "rtsp",
+        "onvif-candidate",
+        "hikvision-isapi",
+        "hikvision-service-8000"
+      ],
+      "preferred_strategies": [],
+      "avoid_strategies": [],
+      "negative_knowledge": [],
+      "validation_status": "tested",
+      "provenance": [
+        "protocol-signature"
+      ],
+      "domains": [
+        "sentinel",
+        "netlens"
+      ],
+      "revision": 2,
+      "legacy_keys": [
+        "hikvision-generic"
+      ],
+      "schema_version": 2,
+      "core_version": "0.2.0",
+      "core_revision": 13
+    },
+    {
+      "stable_id": "artin.device.jfl-hikvision-compatible",
+      "manufacturer": "JFL",
+      "canonical_type": "unknown",
+      "family": "",
+      "model": "",
+      "variant": "",
+      "subtype": "",
+      "aliases": [],
+      "identifiers": [],
+      "fingerprints": [],
+      "capabilities": [
+        "network-video-candidate"
+      ],
+      "protocols": [
+        "hikvision-rtsp-candidate",
+        "onvif-candidate"
+      ],
+      "preferred_strategies": [],
+      "avoid_strategies": [],
+      "negative_knowledge": [],
+      "validation_status": "detected",
+      "provenance": [
+        "compatibility-observation"
+      ],
+      "domains": [
+        "sentinel",
+        "netlens"
+      ],
+      "revision": 2,
+      "legacy_keys": [
+        "jfl-hikvision-compatible"
+      ],
+      "schema_version": 2,
+      "core_version": "0.2.0",
+      "core_revision": 13
+    },
+    {
+      "stable_id": "artin.device.aitek-sigma-seg6050bp",
+      "manufacturer": "Aitek",
+      "canonical_type": "camera-fixed",
+      "family": "SIGMA",
+      "model": "SIGMA-SEG6050BP",
+      "variant": "H2-52PGX",
+      "subtype": "fixed",
+      "aliases": [
+        "SIGMA SEG6050BP"
+      ],
+      "identifiers": [],
+      "fingerprints": [],
+      "capabilities": [
+        "network-video",
+        "fixed-camera",
+        "dual-stream",
+        "listen-audio"
+      ],
+      "protocols": [
+        "rtsp",
+        "onvif"
+      ],
+      "preferred_strategies": [
+        "onvif",
+        "rtsp"
+      ],
+      "avoid_strategies": [
+        "recorder-enumeration"
+      ],
+      "negative_knowledge": [],
+      "validation_status": "field-validated",
+      "provenance": [
+        "field-test"
+      ],
+      "domains": [
+        "sentinel",
+        "netlens"
+      ],
+      "revision": 2,
+      "legacy_keys": [
+        "aitek-sigma-seg6050bp"
+      ],
+      "schema_version": 2,
+      "core_version": "0.2.0",
+      "core_revision": 13
+    },
+    {
+      "stable_id": "artin.device.oem-h2-52pgx",
+      "manufacturer": "OEM/XM",
+      "canonical_type": "camera-fixed",
+      "family": "H2 platform",
+      "model": "H2-52PGX",
+      "variant": "",
+      "subtype": "fixed/bullet",
+      "aliases": [
+        "H2 52PGX"
+      ],
+      "identifiers": [
+        "model:h2-52pgx"
+      ],
+      "fingerprints": [],
+      "capabilities": [
+        "network-video",
+        "fixed-camera",
+        "audio-candidate",
+        "intercom-candidate"
+      ],
+      "protocols": [
+        "rtsp-candidate",
+        "onvif-candidate",
+        "http"
+      ],
+      "preferred_strategies": [
+        "onvif",
+        "rtsp",
+        "http-fingerprint"
+      ],
+      "avoid_strategies": [
+        "recorder-enumeration",
+        "ptz-scan"
+      ],
+      "negative_knowledge": [],
+      "validation_status": "field-identified",
+      "provenance": [
+        "field-observation"
+      ],
+      "domains": [
+        "sentinel",
+        "netlens"
+      ],
+      "revision": 2,
+      "legacy_keys": [
+        "oem-h2-52pgx"
+      ],
+      "schema_version": 2,
+      "core_version": "0.2.0",
+      "core_revision": 13
+    },
+    {
+      "stable_id": "artin.device.aitek-camera",
+      "manufacturer": "Aitek",
+      "canonical_type": "camera-fixed",
+      "family": "",
+      "model": "",
+      "variant": "",
+      "subtype": "fixed",
+      "aliases": [],
+      "identifiers": [],
+      "fingerprints": [],
+      "capabilities": [
+        "network-video",
+        "fixed-camera"
+      ],
+      "protocols": [
+        "rtsp-candidate",
+        "onvif-candidate"
+      ],
+      "preferred_strategies": [],
+      "avoid_strategies": [],
+      "negative_knowledge": [],
+      "validation_status": "field-validated",
+      "provenance": [
+        "field-test"
+      ],
+      "domains": [
+        "sentinel",
+        "netlens"
+      ],
+      "revision": 2,
+      "legacy_keys": [
+        "aitek-camera"
+      ],
+      "schema_version": 2,
+      "core_version": "0.2.0",
+      "core_revision": 13
+    },
+    {
+      "stable_id": "artin.device.it-blue-x3-we2q",
+      "manufacturer": "IT-Blue",
+      "canonical_type": "camera-ptz",
+      "family": "Speed Dome",
+      "model": "X3-WE2Q",
+      "variant": "XM535D1 / V5.02.R02.000A06CD",
+      "subtype": "multi-lens/speed-dome",
+      "aliases": [
+        "XM535D1",
+        "000A06CD"
+      ],
+      "identifiers": [],
+      "fingerprints": [],
+      "capabilities": [
+        "network-video",
+        "ptz",
+        "multi-lens",
+        "multi-view",
+        "fixed-lenses-field-detected",
+        "bidirectional-audio-experimental",
+        "motion-tracking",
+        "human-detection",
+        "ptz-dvrip"
+      ],
+      "protocols": [
+        "rtsp",
+        "onvif-candidate",
+        "xm-dvrip-34567",
+        "xm-dvrip-opmonitor-multilens-experimental",
+        "xm-dvrip-talkback-g711a-experimental"
+      ],
+      "preferred_strategies": [
+        "xm-dvrip-34567",
+        "rtsp",
+        "onvif"
+      ],
+      "avoid_strategies": [
+        "recorder-enumeration"
+      ],
+      "negative_knowledge": [
+        "onvif-ptz-unusable-in-field",
+        "zoom-not-confirmed",
+        "xm-dvrip-fixed-lenses-not-homologated",
+        "xm-dvrip-talkback-not-field-validated"
+      ],
+      "validation_status": "field-validated",
+      "provenance": [
+        "field-test",
+        "field-test-0.2.23-candidate",
+        "implementation-0.2.28-experimental",
+        "implementation-0.2.29-experimental",
+        "implementation-0.2.30-capability-scope",
+        "field-test-0.2.32-multilens",
+        "implementation-0.2.33-per-lens-capabilities"
+      ],
+      "domains": [
+        "sentinel",
+        "netlens"
+      ],
+      "revision": 9,
+      "legacy_keys": [
+        "it-blue-x3-we2q"
+      ],
+      "schema_version": 2,
+      "core_version": "0.2.0",
+      "core_revision": 13
+    },
+    {
+      "stable_id": "artin.device.it-blue-gk7202v300-cloud",
+      "manufacturer": "IT-Blue",
+      "canonical_type": "camera-ptz",
+      "family": "Speed Dome",
+      "model": "GK7202V300",
+      "variant": "IPC_GK7202V300_LPG-G5-WQ",
+      "subtype": "",
+      "aliases": [
+        "000779SU"
+      ],
+      "identifiers": [],
+      "fingerprints": [],
+      "capabilities": [
+        "network-video",
+        "ptz-candidate",
+        "pir",
+        "motion-detection",
+        "human-detection",
+        "alarm"
+      ],
+      "protocols": [
+        "cloud-observed"
+      ],
+      "preferred_strategies": [],
+      "avoid_strategies": [],
+      "negative_knowledge": [],
+      "validation_status": "field-identified-cloud-only",
+      "provenance": [
+        "field-test"
+      ],
+      "domains": [
+        "sentinel",
+        "netlens"
+      ],
+      "revision": 2,
+      "legacy_keys": [
+        "it-blue-gk7202v300-cloud"
+      ],
+      "schema_version": 2,
+      "core_version": "0.2.0",
+      "core_revision": 13
+    },
+    {
+      "stable_id": "artin.device.it-blue-camera",
+      "manufacturer": "IT-Blue",
+      "canonical_type": "camera",
+      "family": "",
+      "model": "",
+      "variant": "",
+      "subtype": "",
+      "aliases": [],
+      "identifiers": [],
+      "fingerprints": [],
+      "capabilities": [
+        "network-video",
+        "bidirectional-audio-candidate"
+      ],
+      "protocols": [
+        "rtsp-candidate",
+        "onvif-candidate",
+        "xm-dvrip-34567-candidate"
+      ],
+      "preferred_strategies": [],
+      "avoid_strategies": [],
+      "negative_knowledge": [],
+      "validation_status": "field-detected",
+      "provenance": [
+        "field-test"
+      ],
+      "domains": [
+        "sentinel",
+        "netlens"
+      ],
+      "revision": 2,
+      "legacy_keys": [
+        "it-blue-camera"
+      ],
+      "schema_version": 2,
+      "core_version": "0.2.0",
+      "core_revision": 13
+    }
+  ],
+  "extensions": [
+    {
+      "stable_id": "artin.device.intelbras-vipc-1230-d-g2",
+      "domain": "sentinel",
+      "extension_schema": "artin-akdb-sentinel-v2",
+      "revision": 2,
+      "payload": {
+        "provider": "intelbras",
+        "protocol_family": "intelbras-ipc-local",
+        "stream_count": 2,
+        "video_codecs": [
+          "H.264",
+          "H.265",
+          "MJPEG"
+        ],
+        "onvif_profiles": [
+          "S",
+          "T"
+        ],
+        "native_protocols": [
+          "rtsp",
+          "onvif",
+          "intelbras-cgi-readonly-candidate"
+        ],
+        "audio_mode": "none",
+        "audio_codecs": [],
+        "talkback_protocol": "",
+        "talkback_scope": "all",
+        "talkback_validation": "unknown",
+        "ptz_mode": "none",
+        "ptz_scope": "all",
+        "max_analog_channels": 0,
+        "max_ip_channels": 0
+      }
+    },
+    {
+      "stable_id": "artin.device.intelbras-nvd-1416",
+      "domain": "sentinel",
+      "extension_schema": "artin-akdb-sentinel-v2",
+      "revision": 2,
+      "payload": {
+        "provider": "intelbras",
+        "protocol_family": "dahua-intelbras",
+        "stream_count": 0,
+        "video_codecs": [],
+        "onvif_profiles": [],
+        "native_protocols": [
+          "rtsp-candidate",
+          "onvif-candidate"
+        ],
+        "audio_mode": "unknown",
+        "audio_codecs": [],
+        "talkback_protocol": "",
+        "talkback_scope": "all",
+        "talkback_validation": "unknown",
+        "ptz_mode": "unknown",
+        "ptz_scope": "all",
+        "max_analog_channels": 0,
+        "max_ip_channels": 0,
+        "max_total_channels": 0
+      }
+    },
+    {
+      "stable_id": "artin.device.intelbras-nvd-1516",
+      "domain": "sentinel",
+      "extension_schema": "artin-akdb-sentinel-v2",
+      "revision": 2,
+      "payload": {
+        "provider": "intelbras",
+        "protocol_family": "dahua-intelbras",
+        "stream_count": 0,
+        "video_codecs": [],
+        "onvif_profiles": [],
+        "native_protocols": [
+          "rtsp-candidate",
+          "onvif-candidate"
+        ],
+        "audio_mode": "unknown",
+        "audio_codecs": [],
+        "talkback_protocol": "",
+        "talkback_scope": "all",
+        "talkback_validation": "unknown",
+        "ptz_mode": "unknown",
+        "ptz_scope": "all",
+        "max_analog_channels": 0,
+        "max_ip_channels": 0,
+        "max_total_channels": 0
+      }
+    },
+    {
+      "stable_id": "artin.device.intelbras-mhdx-1216",
+      "domain": "sentinel",
+      "extension_schema": "artin-akdb-sentinel-v2",
+      "revision": 2,
+      "payload": {
+        "provider": "intelbras",
+        "protocol_family": "dahua-intelbras",
+        "stream_count": 0,
+        "video_codecs": [],
+        "onvif_profiles": [],
+        "native_protocols": [
+          "rtsp-candidate",
+          "onvif-candidate"
+        ],
+        "audio_mode": "unknown",
+        "audio_codecs": [],
+        "talkback_protocol": "",
+        "talkback_scope": "all",
+        "talkback_validation": "unknown",
+        "ptz_mode": "unknown",
+        "ptz_scope": "all",
+        "max_analog_channels": 0,
+        "max_ip_channels": 0,
+        "max_total_channels": 0
+      }
+    },
+    {
+      "stable_id": "artin.device.intelbras-mhdx",
+      "domain": "sentinel",
+      "extension_schema": "artin-akdb-sentinel-v2",
+      "revision": 3,
+      "payload": {
+        "provider": "intelbras",
+        "protocol_family": "dahua-intelbras",
+        "stream_count": 0,
+        "video_codecs": [],
+        "onvif_profiles": [],
+        "native_protocols": [
+          "rtsp",
+          "intelbras-dahua-cgi-readonly-candidate",
+          "onvif-candidate"
+        ],
+        "audio_mode": "unknown",
+        "audio_codecs": [],
+        "talkback_protocol": "",
+        "talkback_scope": "all",
+        "talkback_validation": "unknown",
+        "ptz_mode": "unknown",
+        "ptz_scope": "all",
+        "max_analog_channels": 4,
+        "max_ip_channels": 1
+      }
+    },
+    {
+      "stable_id": "artin.device.intelbras-imx-c",
+      "domain": "sentinel",
+      "extension_schema": "artin-akdb-sentinel-v2",
+      "revision": 4,
+      "payload": {
+        "provider": "intelbras-mibo",
+        "protocol_family": "intelbras-mibo-local",
+        "stream_count": 0,
+        "video_codecs": [],
+        "onvif_profiles": [],
+        "native_protocols": [
+          "rtsp",
+          "onvif",
+          "intelbras-1-candidate"
+        ],
+        "audio_mode": "bidirectional",
+        "audio_codecs": [
+          "AAC"
+        ],
+        "talkback_protocol": "intelbras-1-candidate",
+        "talkback_scope": "primary",
+        "talkback_validation": "candidate",
+        "ptz_mode": "unknown",
+        "ptz_scope": "all",
+        "max_analog_channels": 0,
+        "max_ip_channels": 0
+      }
+    },
+    {
+      "stable_id": "artin.device.intelbras-mibo",
+      "domain": "sentinel",
+      "extension_schema": "artin-akdb-sentinel-v2",
+      "revision": 2,
+      "payload": {
+        "provider": "intelbras-mibo",
+        "protocol_family": "onvif-rtsp",
+        "stream_count": 0,
+        "video_codecs": [],
+        "onvif_profiles": [],
+        "native_protocols": [
+          "onvif",
+          "rtsp"
+        ],
+        "audio_mode": "bidirectional",
+        "audio_codecs": [
+          "unknown"
+        ],
+        "talkback_protocol": "unvalidated",
+        "talkback_scope": "primary",
+        "talkback_validation": "unvalidated",
+        "ptz_mode": "unknown",
+        "ptz_scope": "all",
+        "max_analog_channels": 0,
+        "max_ip_channels": 0
+      }
+    },
+    {
+      "stable_id": "artin.device.hikvision-ds-7216hghi-f1",
+      "domain": "sentinel",
+      "extension_schema": "artin-akdb-sentinel-v2",
+      "revision": 2,
+      "payload": {
+        "provider": "hikvision",
+        "protocol_family": "hikvision-turbohd",
+        "stream_count": 2,
+        "video_codecs": [
+          "H.264",
+          "H.264+"
+        ],
+        "onvif_profiles": [],
+        "native_protocols": [
+          "rtsp",
+          "hikvision-service-8000",
+          "hikvision-isapi-readonly-candidate"
+        ],
+        "audio_mode": "unknown",
+        "audio_codecs": [],
+        "talkback_protocol": "",
+        "talkback_scope": "all",
+        "talkback_validation": "unknown",
+        "ptz_mode": "recorder-mediated",
+        "ptz_scope": "all",
+        "max_analog_channels": 16,
+        "max_ip_channels": 2
+      }
+    },
+    {
+      "stable_id": "artin.device.hikvision-generic",
+      "domain": "sentinel",
+      "extension_schema": "artin-akdb-sentinel-v2",
+      "revision": 2,
+      "payload": {
+        "provider": "hikvision",
+        "protocol_family": "hikvision",
+        "stream_count": 0,
+        "video_codecs": [],
+        "onvif_profiles": [],
+        "native_protocols": [
+          "rtsp",
+          "onvif-candidate",
+          "hikvision-service-8000",
+          "hikvision-isapi-readonly-candidate"
+        ],
+        "audio_mode": "unknown",
+        "audio_codecs": [],
+        "talkback_protocol": "",
+        "talkback_scope": "all",
+        "talkback_validation": "unknown",
+        "ptz_mode": "unknown",
+        "ptz_scope": "all",
+        "max_analog_channels": 0,
+        "max_ip_channels": 0
+      }
+    },
+    {
+      "stable_id": "artin.device.jfl-hikvision-compatible",
+      "domain": "sentinel",
+      "extension_schema": "artin-akdb-sentinel-v2",
+      "revision": 2,
+      "payload": {
+        "provider": "jfl",
+        "protocol_family": "hikvision-compatible",
+        "stream_count": 0,
+        "video_codecs": [],
+        "onvif_profiles": [],
+        "native_protocols": [
+          "hikvision-rtsp-candidate",
+          "onvif-candidate"
+        ],
+        "audio_mode": "unknown",
+        "audio_codecs": [],
+        "talkback_protocol": "",
+        "talkback_scope": "all",
+        "talkback_validation": "unknown",
+        "ptz_mode": "unknown",
+        "ptz_scope": "all",
+        "max_analog_channels": 0,
+        "max_ip_channels": 0
+      }
+    },
+    {
+      "stable_id": "artin.device.aitek-sigma-seg6050bp",
+      "domain": "sentinel",
+      "extension_schema": "artin-akdb-sentinel-v2",
+      "revision": 2,
+      "payload": {
+        "provider": "aitek",
+        "protocol_family": "onvif-rtsp-local",
+        "stream_count": 2,
+        "video_codecs": [],
+        "onvif_profiles": [],
+        "native_protocols": [
+          "rtsp",
+          "onvif"
+        ],
+        "audio_mode": "listen",
+        "audio_codecs": [
+          "pcm_mulaw"
+        ],
+        "talkback_protocol": "",
+        "talkback_scope": "all",
+        "talkback_validation": "unknown",
+        "ptz_mode": "unknown",
+        "ptz_scope": "all",
+        "max_analog_channels": 0,
+        "max_ip_channels": 0
+      }
+    },
+    {
+      "stable_id": "artin.device.oem-h2-52pgx",
+      "domain": "sentinel",
+      "extension_schema": "artin-akdb-sentinel-v2",
+      "revision": 2,
+      "payload": {
+        "provider": "generic",
+        "protocol_family": "generic-onvif-rtsp",
+        "stream_count": 0,
+        "video_codecs": [],
+        "onvif_profiles": [],
+        "native_protocols": [
+          "onvif-candidate",
+          "rtsp-candidate"
+        ],
+        "audio_mode": "unknown",
+        "audio_codecs": [],
+        "talkback_protocol": "",
+        "talkback_scope": "all",
+        "talkback_validation": "unknown",
+        "ptz_mode": "none",
+        "ptz_scope": "all",
+        "max_analog_channels": 0,
+        "max_ip_channels": 0
+      }
+    },
+    {
+      "stable_id": "artin.device.aitek-camera",
+      "domain": "sentinel",
+      "extension_schema": "artin-akdb-sentinel-v2",
+      "revision": 2,
+      "payload": {
+        "provider": "aitek",
+        "protocol_family": "generic-onvif-rtsp",
+        "stream_count": 0,
+        "video_codecs": [],
+        "onvif_profiles": [],
+        "native_protocols": [
+          "rtsp",
+          "onvif-candidate"
+        ],
+        "audio_mode": "unknown",
+        "audio_codecs": [],
+        "talkback_protocol": "",
+        "talkback_scope": "all",
+        "talkback_validation": "unknown",
+        "ptz_mode": "unknown",
+        "ptz_scope": "all",
+        "max_analog_channels": 0,
+        "max_ip_channels": 0
+      }
+    },
+    {
+      "stable_id": "artin.device.it-blue-x3-we2q",
+      "domain": "sentinel",
+      "extension_schema": "artin-akdb-sentinel-v2",
+      "revision": 9,
+      "payload": {
+        "provider": "it-blue",
+        "protocol_family": "xm-icsee-local",
+        "stream_count": 2,
+        "video_codecs": [],
+        "onvif_profiles": [],
+        "native_protocols": [
+          "rtsp",
+          "onvif-candidate",
+          "xm-dvrip-34567",
+          "xm-dvrip-opmonitor-multilens-experimental"
+        ],
+        "audio_mode": "bidirectional",
+        "audio_codecs": [
+          "unknown"
+        ],
+        "talkback_protocol": "xm-dvrip-g711a-experimental",
+        "talkback_scope": "primary",
+        "talkback_validation": "experimental",
+        "ptz_mode": "dvrip-confirmed",
+        "ptz_scope": "primary",
+        "max_analog_channels": 0,
+        "max_ip_channels": 0
+      }
+    },
+    {
+      "stable_id": "artin.device.it-blue-gk7202v300-cloud",
+      "domain": "sentinel",
+      "extension_schema": "artin-akdb-sentinel-v2",
+      "revision": 2,
+      "payload": {
+        "provider": "it-blue",
+        "protocol_family": "cloud-observed",
+        "stream_count": 0,
+        "video_codecs": [],
+        "onvif_profiles": [],
+        "native_protocols": [],
+        "audio_mode": "unknown",
+        "audio_codecs": [],
+        "talkback_protocol": "",
+        "talkback_scope": "all",
+        "talkback_validation": "unknown",
+        "ptz_mode": "unknown",
+        "ptz_scope": "all",
+        "max_analog_channels": 0,
+        "max_ip_channels": 0
+      }
+    },
+    {
+      "stable_id": "artin.device.it-blue-camera",
+      "domain": "sentinel",
+      "extension_schema": "artin-akdb-sentinel-v2",
+      "revision": 2,
+      "payload": {
+        "provider": "it-blue",
+        "protocol_family": "generic-onvif-rtsp",
+        "stream_count": 0,
+        "video_codecs": [],
+        "onvif_profiles": [],
+        "native_protocols": [
+          "rtsp-candidate",
+          "onvif-candidate",
+          "xm-dvrip-34567-candidate"
+        ],
+        "audio_mode": "bidirectional",
+        "audio_codecs": [
+          "unknown"
+        ],
+        "talkback_protocol": "unvalidated",
+        "talkback_scope": "all",
+        "talkback_validation": "unknown",
+        "ptz_mode": "unknown",
+        "ptz_scope": "all",
+        "max_analog_channels": 0,
+        "max_ip_channels": 0
+      }
+    }
+  ]
+}
