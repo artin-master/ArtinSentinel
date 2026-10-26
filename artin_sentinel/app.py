@@ -2172,6 +2172,10 @@ class MainWindow(QMainWindow, CameraEventUi):
         self.playback_trim_start = None
         self.playback_trim_end = None
         self._update_in_progress = False
+        self._import_onboarding_queue = []
+        self._import_onboarding_current = None
+        self._import_onboarding_failed = []
+        self._import_onboarding_total = 0
         self._ptz_active_direction = ""
         self._ptz_command_pending = False
         self.ptz_hold_timer = QTimer(self)
@@ -6902,9 +6906,23 @@ class MainWindow(QMainWindow, CameraEventUi):
         inv = QVBoxLayout(inventory)
         inv.setContentsMargins(8, 8, 8, 8)
         inv.setSpacing(6)
-        inv_title = QLabel("EQUIPAMENTOS CADASTRADOS NO SITE")
+        inv_title = QLabel("EQUIPAMENTOS CADASTRADOS")
         inv_title.setStyleSheet("font-weight:700;color:#c3d6db;font-size:11px")
         inv.addWidget(inv_title)
+        scope_row = QHBoxLayout()
+        scope_label = QLabel("VISÃO")
+        scope_label.setStyleSheet("color:#98b3bc;font-size:10px;font-weight:700")
+        self.device_scope_combo = QComboBox()
+        self.device_scope_combo.addItem("Todos os Sites", "all")
+        self.device_scope_combo.addItem("Somente Site ativo", "active")
+        self.device_scope_combo.setToolTip(
+            "Esta visão é administrativa e não altera o Site ativo do monitoramento."
+        )
+        self.device_scope_combo.currentIndexChanged.connect(lambda *_: self.refresh_all())
+        scope_row.addWidget(scope_label)
+        scope_row.addWidget(self.device_scope_combo)
+        scope_row.addStretch()
+        inv.addLayout(scope_row)
         self.device_inventory_count = QLabel("0 cadastrados • 0 online")
         self.device_inventory_count.setStyleSheet("color:#98b3bc")
         inv.addWidget(self.device_inventory_count)
@@ -7984,9 +8002,12 @@ class MainWindow(QMainWindow, CameraEventUi):
         self.site_count_label.setText(f"{len(sites)} Site(s) • cada equipamento em um Site")
         self.refresh_playback_access()
 
-        devices = self.db.list_devices(self.current_site_id)
+        from .import_onboarding import configuration_devices
+        scope = self.device_scope_combo.currentData() if hasattr(self, "device_scope_combo") else "active"
+        devices = configuration_devices(self.db, self.current_site_id, scope)
         self.dev_table.setRowCount(len(devices))
         online = offline = attentions = 0
+        site_names = {int(site["id"]): str(site["name"]) for site in sites}
         for row, device in enumerate(devices):
             model = clean_model(device["manufacturer"], device["model"])
             maker_model = " / ".join(part for part in (device["manufacturer"] or "", "" if model == "—" else model) if part) or "—"
@@ -8035,7 +8056,10 @@ class MainWindow(QMainWindow, CameraEventUi):
                 item = QTableWidgetItem(str(value))
                 if col == 0:
                     item.setData(Qt.UserRole, int(device["id"]))
-                    item.setToolTip(f"Provider: {device['provider']} • ID local: {device['id']}")
+                    site_label = site_names.get(int(device["site_id"] or 0), "Site desconhecido")
+                    item.setToolTip(
+                        f"Site: {site_label} • Provider: {device['provider']} • ID local: {device['id']}"
+                    )
                 elif col == 1 and endpoints:
                     item.setToolTip("Endpoints do mesmo equipamento:\n" + "\n".join(
                         f"{ep['ip']} • {status_label(ep['status'])}" for ep in endpoints
@@ -8051,13 +8075,22 @@ class MainWindow(QMainWindow, CameraEventUi):
 
         if hasattr(self, "device_inventory_count"):
             self._device_inventory_online_count = online
-            self.device_inventory_count.setText(f"{len(devices)} cadastrado(s) • {online} online")
+            scope_text = "Todos os Sites" if scope == "all" else "Site ativo"
+            self.device_inventory_count.setText(
+                f"{len(devices)} cadastrado(s) • {online} online • {scope_text}"
+            )
 
         if hasattr(self, "device_filter"):
             self.refresh_device_filter(self.device_filter.text())
         if hasattr(self, "device_detail_name"):
             self.refresh_device_inspector()
 
+        # Monitoring, health and layouts remain bound to the active Site.
+        # The all-Sites list above is an administrative inventory only.
+        devices = self.db.list_devices(self.current_site_id)
+        online = sum(str(device["status"] or "") == "online" for device in devices)
+        offline = sum(str(device["status"] or "") == "offline" for device in devices)
+        attentions = offline
         site = next((s for s in sites if s["id"] == self.current_site_id), None)
         site_name = site["name"] if site else "—"
         unknown = len(devices) - online - offline
@@ -8522,6 +8555,91 @@ class MainWindow(QMainWindow, CameraEventUi):
             if existing is None and hint['sdk']=='hikvision' and sdk_auto.isEnabled() and sdk_auto.isChecked():
                 from .hik_sdk_ui import configure
                 configure(self,device_id=device_id,prefer_sdk=True)
+
+    def select_configuration_device(self, device_id: int) -> bool:
+        """Reveal a device for administration without changing the active monitoring Site."""
+        device = self.db.get_device(int(device_id))
+        if not device:
+            return False
+        if hasattr(self, "device_scope_combo") and self.device_scope_combo.currentData() != "all":
+            self.device_scope_combo.blockSignals(True)
+            self.device_scope_combo.setCurrentIndex(max(0, self.device_scope_combo.findData("all")))
+            self.device_scope_combo.blockSignals(False)
+            self.refresh_all()
+        for row in range(self.dev_table.rowCount()):
+            item = self.dev_table.item(row, 0)
+            if item and int(item.data(Qt.UserRole) or 0) == int(device_id):
+                self.dev_table.selectRow(row)
+                self.dev_table.scrollToItem(item, QAbstractItemView.PositionAtCenter)
+                self.config_tabs.setCurrentIndex(0)
+                self.show_page(self.PAGE_CONFIG)
+                return True
+        return False
+
+    def begin_import_onboarding(self, device_ids):
+        """Resume imported records and request only access/channel data missing on this PC."""
+        from .import_onboarding import devices_needing_setup
+        pending = devices_needing_setup(self.db, device_ids)
+        if not pending:
+            self.bottom_notice.setText("Importação concluída • nenhum equipamento exige configuração adicional")
+            return
+        self._import_onboarding_queue = list(pending)
+        self._import_onboarding_current = None
+        self._import_onboarding_failed = []
+        self._import_onboarding_total = len(pending)
+        if hasattr(self, "device_scope_combo"):
+            self.device_scope_combo.blockSignals(True)
+            self.device_scope_combo.setCurrentIndex(max(0, self.device_scope_combo.findData("all")))
+            self.device_scope_combo.blockSignals(False)
+        self.refresh_all()
+        self.config_tabs.setCurrentIndex(0)
+        self.show_page(self.PAGE_CONFIG)
+        QTimer.singleShot(0, self._continue_import_onboarding)
+
+    def _continue_import_onboarding(self):
+        if self._import_onboarding_current is not None:
+            return
+        if self.recorder_credentials_dialog is not None or self.channel_scan_context is not None:
+            QTimer.singleShot(250, self._continue_import_onboarding)
+            return
+        while self._import_onboarding_queue:
+            device_id = int(self._import_onboarding_queue.pop(0))
+            device = self.db.get_device(device_id)
+            if not device:
+                continue
+            if not self.select_configuration_device(device_id):
+                self._import_onboarding_failed.append(device_id)
+                continue
+            self._import_onboarding_current = device_id
+            self.bottom_notice.setText(
+                f"Configuração pós-importação • {device['name']} • informe o acesso para validar os canais"
+            )
+            QTimer.singleShot(0, self.read_device_channels_or_stream)
+            return
+        total = int(self._import_onboarding_total or 0)
+        failed = len(self._import_onboarding_failed)
+        self._import_onboarding_total = 0
+        if failed:
+            QMessageBox.information(
+                self, "Importação assistida",
+                f"Configuração concluída para {total - failed} de {total} equipamento(s).\n\n"
+                f"{failed} equipamento(s) ficaram pendentes e continuam em "
+                "Configuração → Equipamentos → Todos os Sites."
+            )
+        elif total:
+            QMessageBox.information(
+                self, "Importação assistida",
+                f"{total} equipamento(s) foram percorridos. "
+                "Credenciais e canais permanecem associados ao cadastro existente."
+            )
+
+    def _complete_import_onboarding_device(self, device_id: int, success: bool):
+        if self._import_onboarding_current != int(device_id):
+            return
+        if not success:
+            self._import_onboarding_failed.append(int(device_id))
+        self._import_onboarding_current = None
+        QTimer.singleShot(150, self._continue_import_onboarding)
 
     def selected_device_id(self):
         row = self.dev_table.currentRow()
@@ -9895,7 +10013,11 @@ class MainWindow(QMainWindow, CameraEventUi):
         self._start_recorder_channel_scan(device_id, device, username, secret)
 
     def _recorder_credentials_rejected(self):
+        inputs = self.recorder_credentials_inputs
+        device_id = int(inputs[0]) if inputs else None
         self._resume_monitor_after_recorder()
+        if device_id is not None and self._import_onboarding_current == device_id:
+            QTimer.singleShot(0, lambda did=device_id: self._complete_import_onboarding_device(did, False))
 
     def _recorder_credentials_finished(self, _result):
         self.recorder_credentials_dialog = None
@@ -10289,10 +10411,19 @@ class MainWindow(QMainWindow, CameraEventUi):
             box.setText(message)
             box.setStandardButtons(QMessageBox.Ok)
             box.setModal(True)
+            if self._import_onboarding_current == int(device_id):
+                box.finished.connect(
+                    lambda _result=0, did=int(device_id):
+                    self._complete_import_onboarding_device(did, False)
+                )
             box.open()
             # Parent ownership keeps the message box valid; WA_DeleteOnClose
             # lets Qt release it after the user dismisses it.
             box.setAttribute(Qt.WA_DeleteOnClose, True)
+        elif error is not None and self._import_onboarding_current == int(device_id):
+            QTimer.singleShot(
+                0, lambda did=int(device_id): self._complete_import_onboarding_device(did, False)
+            )
 
     def show_saved_channels(self):
         device_id = self.selected_device_id()
@@ -10375,6 +10506,11 @@ class MainWindow(QMainWindow, CameraEventUi):
         dialog.setModal(True)
         self._transient_dialogs.append(dialog)
         dialog.finished.connect(lambda _=0, d=dialog: self._release_transient_dialog(d))
+        if self._import_onboarding_current == int(device["id"]):
+            dialog.finished.connect(
+                lambda _=0, did=int(device["id"]):
+                self._complete_import_onboarding_device(did, True)
+            )
         dialog.open()
 
     def diagnose_selected_streams(self):
