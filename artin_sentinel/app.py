@@ -6792,6 +6792,11 @@ class MainWindow(QMainWindow, CameraEventUi):
         self.web_button.setToolTip("Abrir a interface Web detectada do equipamento no navegador padrão")
         self.web_button.setEnabled(False)
         self.web_button.clicked.connect(self.open_selected_device_web)
+        pending_setup = QPushButton("Configurar pendentes")
+        pending_setup.setToolTip(
+            "Retomar equipamentos já cadastrados/importados que ainda precisam de credencial ou canais validados"
+        )
+        pending_setup.clicked.connect(self.configure_pending_devices)
         more = QToolButton()
         more.setObjectName("ActionMenu")
         more.setText("Mais ▾")
@@ -6811,7 +6816,7 @@ class MainWindow(QMainWindow, CameraEventUi):
         delete.triggered.connect(self.delete_selected_device)
         more.setMenu(device_menu)
         self._device_more_menu = device_menu
-        for button in (add, edit, diag, self.channels_button, self.web_button):
+        for button in (add, edit, diag, self.channels_button, self.web_button, pending_setup):
             button.setObjectName("CompactAction")
             primary.addWidget(button)
         primary.addWidget(more)
@@ -8575,6 +8580,19 @@ class MainWindow(QMainWindow, CameraEventUi):
                 self.show_page(self.PAGE_CONFIG)
                 return True
         return False
+
+    def configure_pending_devices(self):
+        """Resume incomplete existing/imported devices without creating or moving records."""
+        device_ids = [int(device["id"]) for device in self.db.list_devices(None)]
+        from .import_onboarding import devices_needing_setup
+        pending = devices_needing_setup(self.db, device_ids)
+        if not pending:
+            QMessageBox.information(
+                self, "Configuração pendente",
+                "Nenhum equipamento ativo precisa de credencial ou validação de canais neste momento."
+            )
+            return
+        self.begin_import_onboarding(pending)
 
     def begin_import_onboarding(self, device_ids):
         """Resume imported records and request only access/channel data missing on this PC."""
