@@ -8,9 +8,34 @@ from urllib.error import HTTPError, URLError
 from xml.etree import ElementTree as ET
 from uuid import uuid4
 import hashlib
+import re
 import time
 
 from .recording_search import Recording, SearchResult, RecordingSearchError, _base_url, _NoRedirect
+
+
+_TRACK_RE = re.compile(r"^/Streaming/tracks/(\d+)/?$", re.IGNORECASE)
+
+
+def _safe_status(value: str) -> str:
+    clean = re.sub(r"[^A-Za-z0-9 _.-]", "", (value or "").strip())[:32]
+    return clean or "desconhecido"
+
+
+def _recording_size(uri: str) -> int:
+    try:
+        params = dict(parse_qsl(urlparse(uri).query, keep_blank_values=True))
+        return max(0, int(params.get("size", "0")))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _validated_playback_uri(uri: str, track: int) -> bool:
+    parsed = urlparse(uri)
+    if parsed.scheme.lower() != "rtsp" or not parsed.hostname or parsed.username or parsed.password:
+        return False
+    match = _TRACK_RE.fullmatch(parsed.path)
+    return bool(match and int(match.group(1)) == int(track))
 
 
 def uses_hikvision_recordings(device):
@@ -65,6 +90,8 @@ def search_hikvision_recordings(web_url: str, username: str, password: str, chan
                 f'<searchID>{search_id}</searchID><trackIDList><trackID>{track}</trackID></trackIDList>'
                 f'<timeSpanList><timeSpan><startTime>{_utc_time(start)}</startTime>'
                 f'<endTime>{_utc_time(end)}</endTime></timeSpan></timeSpanList>'
+                f'<contentTypeList><contentType>video</contentType></contentTypeList>'
+                f'<metadataList><metadataDescriptor>//recordType.meta.std-cgi.com</metadataDescriptor></metadataList>'
                 f'<maxResults>40</maxResults><searchResultPostion>{position}</searchResultPostion>'
                 f'</CMSearchDescription>').encode('utf-8')
         request = Request(base + '/ISAPI/ContentMgmt/search', data=body, method='POST',
@@ -83,7 +110,11 @@ def search_hikvision_recordings(web_url: str, username: str, password: str, chan
             root = ET.fromstring(data)
         except ET.ParseError as exc:
             raise RecordingSearchError('Resposta de gravações Hikvision inválida') from exc
-        if root.tag.rsplit('}', 1)[-1] != 'CMSearchResult':
+        root_name = root.tag.rsplit('}', 1)[-1]
+        if root_name == 'ResponseStatus':
+            detail = _safe_status(_child(root, 'subStatusCode') or _child(root, 'statusString'))
+            raise RecordingSearchError(f'Gravador Hikvision rejeitou a consulta ISAPI ({detail})')
+        if root_name != 'CMSearchResult':
             raise RecordingSearchError('Resposta ISAPI não contém resultados de gravação')
         status = _child(root, 'responseStatusStrg').upper()
         if _child(root, 'responseStatus').lower() == 'false' or status not in {'', 'OK', 'MATCHES', 'MORE', 'NO MATCHES', 'NO MATCH', 'NOMATCHES'}:
@@ -101,11 +132,9 @@ def search_hikvision_recordings(web_url: str, username: str, password: str, chan
                 begin = _local_time(_child(item, 'startTime'))
                 finish = _local_time(_child(item, 'endTime'))
                 uri = _child(item, 'playbackURI')
-                parsed = urlparse(uri)
                 if begin >= end or finish <= start:
                     continue
-                if not (begin < finish and parsed.scheme == 'rtsp' and parsed.hostname and not parsed.username
-                        and parsed.path.startswith('/Streaming/tracks/')):
+                if not (begin < finish and _validated_playback_uri(uri, track)):
                     ignored += 1
                     continue
                 key = (begin, finish, uri)
@@ -114,7 +143,7 @@ def search_hikvision_recordings(web_url: str, username: str, password: str, chan
                 seen.add(key)
                 found.append(Recording(channel, begin.strftime('%Y-%m-%d %H:%M:%S'),
                                        finish.strftime('%Y-%m-%d %H:%M:%S'),
-                                       _child(item, 'metadataDescriptor')[:24] or 'gravação', 0,
+                                       _child(item, 'metadataDescriptor')[:24] or 'gravação', _recording_size(uri),
                                        playback_uri=uri))
             except (ValueError, OverflowError):
                 ignored += 1
@@ -136,8 +165,9 @@ def hikvision_playback_url(recording: Recording, host: str, start: datetime, end
     """Use the returned segment URI, rerouted to the enrolled recorder endpoint."""
     parsed = urlparse(recording.playback_uri)
     destination = urlparse(_base_url(host))
-    if (parsed.scheme != 'rtsp' or not parsed.path.startswith('/Streaming/tracks/')
-            or parsed.username or not 1 <= int(port) <= 65535 or end <= start):
+    track_match = _TRACK_RE.fullmatch(parsed.path)
+    if (parsed.scheme.lower() != 'rtsp' or not track_match
+            or parsed.username or parsed.password or not 1 <= int(port) <= 65535 or end <= start):
         raise RecordingSearchError('URL de reprodução Hikvision inválida')
     params = dict(parse_qsl(parsed.query, keep_blank_values=True))
     clip_end = datetime.strptime(recording.end, '%Y-%m-%d %H:%M:%S')
