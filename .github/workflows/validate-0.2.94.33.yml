@@ -1,5 +1,9 @@
 name: Validate Artin Sentinel 0.2.94.33
 
+concurrency:
+  group: sentinel-0.2.94.33-validation
+  cancel-in-progress: true
+
 on:
   push:
     branches:
