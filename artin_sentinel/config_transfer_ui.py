@@ -1,7 +1,7 @@
 """Administrative transfer dialogs. Preview never changes the inventory."""
 import json,os,tempfile,sqlite3
 from pathlib import Path
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QDialog,QVBoxLayout,QHBoxLayout,QLabel,QCheckBox,
     QTreeWidget,QTreeWidgetItem,QTableWidget,QTableWidgetItem,QHeaderView,
@@ -161,10 +161,16 @@ def import_devices(owner):
     if dialog.exec()!=QDialog.Accepted or not authorize(owner,'admin'):return
     try:
         counts=import_configuration(owner.db,payload,selected_keys=dialog.selected_keys(),expected_signature=dialog.preview['signature'])
+        post_preview=preview_configuration(owner.db,payload)
+        from .import_onboarding import target_device_ids
+        setup_ids=target_device_ids(post_preview)
         owner.refresh_all()
     except (ValueError,TypeError,OSError,OverflowError,sqlite3.Error) as exc:
         QMessageBox.warning(owner,'Importar equipamentos',str(exc));return
     skipped=dialog.preview['counts']
     QMessageBox.information(owner,'Importação concluída',
         f"Incluídos: {counts['devices']} equipamento(s), {counts['channels']} canal(is), {counts['sites']} Site(s) e {counts['layouts']} layout(s).\n"
-        f"Preservados: {skipped['existing']} cadastro(s) existente(s). Conflitos ignorados: {skipped['conflict']}.\n\nInforme as credenciais e leia/valide os canais dos equipamentos importados.")
+        f"Preservados: {skipped['existing']} cadastro(s) existente(s). Conflitos ignorados: {skipped['conflict']}.\n\n"
+        "O Sentinel abrirá a configuração assistida dos equipamentos que ainda precisam de credencial ou validação de canais.")
+    if setup_ids and hasattr(owner,'begin_import_onboarding'):
+        QTimer.singleShot(0,lambda ids=tuple(setup_ids):owner.begin_import_onboarding(ids))
