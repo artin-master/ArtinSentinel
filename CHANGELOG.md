@@ -1,3 +1,12 @@
+# 0.2.94.33 — 26/10/2026
+
+- Configuração → Equipamentos ganha visão Todos os Sites sem alterar o Site ativo do monitoramento.
+- Importação retoma equipamentos já cadastrados e recém-importados sem duplicação; pendências de credencial/rotas entram em configuração assistida.
+- Após credencial, o fluxo normal do provider executa leitura/validação dos canais; a ação manual Canais / Stream permanece.
+- Hikvision ISAPI recebe XML de busca mais compatível, ResponseStatus sanitizado, validação estrita de track/playbackURI e tamanho de trecho quando informado.
+- HCNetSDK Hikvision da 0.2.94.32 e todos os caminhos Intelbras/NetSDK/Cloud são preservados.
+- Candidata para validação física em DVRs importados da Mallet e em gravação Hikvision conhecida.
+
 # 0.2.94.32 — 22/10/2026
 
 - Inventário extensível Componentes e SDKs: executáveis, codecs, carga nativa isolada e sessões observadas.
