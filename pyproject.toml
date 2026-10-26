@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "artin-sentinel"
-version = "0.2.94.32"
+version = "0.2.94.33"
 description = "Artin Sentinel — Monitoramento CFTV avançado"
 readme = "README.md"
 requires-python = ">=3.12"
