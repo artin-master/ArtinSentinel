@@ -6906,7 +6906,7 @@ class MainWindow(QMainWindow, CameraEventUi):
         inv = QVBoxLayout(inventory)
         inv.setContentsMargins(8, 8, 8, 8)
         inv.setSpacing(6)
-        inv_title = QLabel("EQUIPAMENTOS CADASTRADOS")
+        inv_title = QLabel("EQUIPAMENTOS CADASTRADOS NO SITE / TODOS OS SITES")
         inv_title.setStyleSheet("font-weight:700;color:#c3d6db;font-size:11px")
         inv.addWidget(inv_title)
         scope_row = QHBoxLayout()
