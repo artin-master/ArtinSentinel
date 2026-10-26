@@ -222,7 +222,7 @@ def _plan(db,sites):
         sid=matches[0]['id'] if len(matches)==1 else None
         endpoints=Counter(d['ip'].casefold() for d in site['devices'])
         for di,dev in enumerate(site['devices']):
-            status='new';reason='Equipamento novo'
+            status='new';reason='Equipamento novo';target_device_id=None
             matched={d['id']:d for key in keys if dev[key] for d in index[key][dev[key]]}
             same_address=address_index[(sid,dev['ip'].casefold())] if sid is not None else []
             if len(matches)>1 or (matches and matches[0]['archived']):status='conflict';reason='Site ambíguo ou arquivado no destino'
@@ -235,13 +235,17 @@ def _plan(db,sites):
                     or any(dev[k] and d['_'+k] and dev[k]!=d['_'+k] for k in keys) for d in matched.values())
                 status='conflict' if incompatible else 'existing'
                 reason='Identificadores ou fabricante divergentes' if incompatible else 'Serial, UUID ou MAC já cadastrado; preservado'
+                if status == 'existing':
+                    target_device_id = int(sorted(matched)[0])
             elif same_address:
                 old=same_address[0]
                 different=(dev['port'] is not None and old['port'] is not None and dev['port']!=old['port']) or any(bool(dev[k] or old['_'+k]) and dev[k]!=old['_'+k] for k in keys) or any(old[k] and dev[k] and old[k].casefold()!=dev[k].casefold() for k in ('manufacturer','model'))
                 status='conflict' if different else 'existing'
                 reason='Endereço ocupado com identidade diferente ou incompleta' if different else 'Endereço já cadastrado neste Site; preservado'
+                if status == 'existing':
+                    target_device_id = int(old['id'])
             rows.append(dict(key=(si,di),site=site['name'],name=dev['name'],ip=dev['ip'],serial=dev['serial'],
-                status=status,reason=reason,channels=len(dev['channels'])))
+                status=status,reason=reason,channels=len(dev['channels']),target_device_id=target_device_id))
     counts={key:sum(row['status']==key for row in rows) for key in ('new','existing','conflict')}
     snapshot=dict(sites=sites,rows=rows,target_devices=[(d['id'],d['site_id'],d['ip'],d['_serial'],d['_uuid'],d['_mac'],d['manufacturer'],d['model'],d['archived']) for d in existing],target_sites=[(s['id'],s['name'],s['archived']) for s in target_sites],
         layouts=[tuple(row) for row in db.conn.execute('SELECT site_id FROM live_workspaces')],
