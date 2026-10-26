@@ -8570,7 +8570,7 @@ class MainWindow(QMainWindow, CameraEventUi):
             item = self.dev_table.item(row, 0)
             if item and int(item.data(Qt.UserRole) or 0) == int(device_id):
                 self.dev_table.selectRow(row)
-                self.dev_table.scrollToItem(item, QAbstractItemView.PositionAtCenter)
+                self.dev_table.scrollToItem(item, QAbstractItemView.ScrollHint.PositionAtCenter)
                 self.config_tabs.setCurrentIndex(0)
                 self.show_page(self.PAGE_CONFIG)
                 return True
