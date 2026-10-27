@@ -104,4 +104,4 @@ def test_stream_audio_ptz_and_diagnostics_use_compact_icons():
     assert '_standard_icon_label("SP_MediaVolume", "Áudio ao vivo"' in source
     assert '_standard_icon_label("SP_ArrowUp", "Controle PTZ / Speed Dome"' in source
     assert 'SP_MessageBoxInformation' in source
-    assert 'SP_MediaStop if active else QStyle.StandardPixmap.SP_MediaVolume' in source
+    assert 'titanium_icon("stop" if active else "audio", 20)' in source
