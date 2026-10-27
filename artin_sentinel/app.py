@@ -78,6 +78,7 @@ from .ip_camera import scan_direct_camera_streams, DirectCameraScanResult
 from .live import DvripLiveStreamSession
 from .direct_revalidation import previously_confirmed, diagnostic_line, recoverable_native_channel
 from .credential_store import CredentialStore
+from .ui_titanium import titanium_icon, titanium_mark, titanium_app_icon
 from .app_auth import AppAuth
 from .access_control import AccessControl,requires_permission,authorize
 from .media_process import wait_media_sessions, media_session_chain
@@ -202,8 +203,21 @@ QPushButton {
 QPushButton:hover { background:#204359; border-color:#37c8e8; }
 QPushButton:pressed { background:#1a3548; }
 QPushButton#CompactAction {
+    background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #263a4c,stop:.48 #172838,stop:1 #0d1824);
+    border:1px solid #7f94a4;
+    border-radius:7px;
     padding:7px 10px;
     min-width:0;
+    color:#edf6fa;
+    font-weight:600;
+}
+QPushButton#CompactAction:hover {
+    border:1px solid #30d8ff;
+    background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #29475b,stop:.5 #163448,stop:1 #0a2230);
+}
+QPushButton#CompactAction:pressed {
+    background:#09141e;
+    border-color:#b8eefe;
 }
 QPushButton:checked {
     background:#173a4b;
@@ -216,24 +230,26 @@ QPushButton:disabled {
     border-color:#34434a;
 }
 QToolButton#ActionMenu {
-    background:#182f42;
-    border:1px solid #294258;
-    border-radius:6px;
+    background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #263a4c,stop:.48 #172838,stop:1 #0d1824);
+    border:1px solid #7f94a4;
+    border-radius:7px;
     padding:8px 12px;
+    color:#edf6fa;
+    font-weight:600;
 }
-QToolButton#ActionMenu:hover { background:#204359; }
-QToolButton#ActionMenu:pressed { background:#1a3548; }
+QToolButton#ActionMenu:hover { background:#163448; border-color:#30d8ff; }
+QToolButton#ActionMenu:pressed { background:#09141e; border-color:#b8eefe; }
 QToolButton#ToolbarIconAction {
-    background:#14232f;
-    border:1px solid #294258;
+    background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #263847,stop:.55 #122431,stop:1 #09151f);
+    border:1px solid #718a9a;
     border-radius:7px;
     padding:5px;
     min-width:30px;
     min-height:28px;
 }
-QToolButton#ToolbarIconAction:hover { background:#182f42; border-color:#37c8e8; }
-QToolButton#ToolbarIconAction:pressed { background:#204359; }
-QToolButton#ToolbarIconAction:checked { background:#204359; border-color:#37c8e8; }
+QToolButton#ToolbarIconAction:hover { background:#173448; border-color:#30d8ff; }
+QToolButton#ToolbarIconAction:pressed { background:#08131d; border-color:#d8f7ff; }
+QToolButton#ToolbarIconAction:checked { background:#0b2b3b; border-color:#30d8ff; }
 QFrame#LiveToolbarGroup {
     background:#14232f;
     border:1px solid #345365;
@@ -1097,7 +1113,7 @@ class VideoTile(QFrame):
         self.stream_badge.setStyleSheet("color:#55d996;font-size:10px;font-weight:700;padding:0 4px")
         self.stream_badge.hide()
         self.audio_button = QToolButton()
-        self.audio_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaVolume))
+        self.audio_button.setIcon(titanium_icon("audio", 18))
         self.audio_button.setIconSize(QSize(15, 15))
         self.audio_button.setToolTip("Ouvir áudio deste canal")
         self.audio_button.setAutoRaise(True)
@@ -1494,7 +1510,7 @@ class DetachedMonitorWindow(QMainWindow):
         self._individual_return_fullscreen = False
         self._restore_geometry = None
         self.setWindowTitle(f"Artin Sentinel — Monitoramento {self.window_key}")
-        self.setWindowIcon(QIcon(resource_path("artin-sentinel.png")))
+        self.setWindowIcon(titanium_app_icon())
         self.resize(1180, 760)
         self.setMinimumSize(760, 480)
 
@@ -2085,7 +2101,7 @@ class MainWindow(QMainWindow, CameraEventUi):
         self.app_auth = AppAuth(data_dir() / "access.json")
         self.access_control = AccessControl(data_dir())
         self.setWindowTitle(f"Artin Sentinel {__version__}")
-        self.setWindowIcon(QIcon(resource_path("artin-sentinel.png")))
+        self.setWindowIcon(titanium_app_icon())
         self.resize(1460, 900)
         self.setMinimumSize(1100, 700)
 
@@ -2266,8 +2282,7 @@ class MainWindow(QMainWindow, CameraEventUi):
         mark = QLabel()
         mark.setObjectName('BrandMark')
         mark.setStyleSheet('background:transparent;border:none;padding:0')
-        pix = QPixmap(resource_path("artin-sentinel.png"))
-        mark.setPixmap(pix.scaled(50, 50, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        mark.setPixmap(titanium_mark(50))
         mark.setFixedSize(50,50)
         layout.addWidget(mark)
         layout.addSpacing(8)
@@ -2304,6 +2319,8 @@ class MainWindow(QMainWindow, CameraEventUi):
         for text, index in items:
             button = QPushButton(text)
             button.setObjectName("TopNav")
+            button.setIcon(titanium_icon("live" if index == self.PAGE_LIVE else "play" if index == self.PAGE_PLAYBACK else "settings", 22))
+            button.setIconSize(QSize(20, 20))
             button.setCheckable(True)
             button.clicked.connect(lambda checked=False, i=index: self.show_page(i))
             self.nav_group.addButton(button, index)
@@ -6758,6 +6775,8 @@ class MainWindow(QMainWindow, CameraEventUi):
 
         primary = QHBoxLayout()
         add = QPushButton("Adicionar / localizar ▾")
+        add.setIcon(titanium_icon("add", 22))
+        add.setIconSize(QSize(20, 20))
         add.setToolTip("Localizar na rede ou cadastrar um equipamento pelo endereço")
         add_menu=QMenu(add)
         add_menu.addAction('Localizar na rede…',self.show_discovery_dialog)
@@ -6766,7 +6785,9 @@ class MainWindow(QMainWindow, CameraEventUi):
         add_menu.addAction('Intelbras Cloud…',self.add_intelbras_cloud_bridge)
         add.setMenu(add_menu)
         edit = QPushButton("Editar")
-        edit.setToolTip("Editar nome, tipo, fabricante e modelo")
+        edit.setIcon(titanium_icon("edit", 22))
+        edit.setIconSize(QSize(20, 20))
+        edit.setToolTip("Editar cadastro, acesso e validar canais novamente")
         edit_menu=QMenu(edit)
         edit_menu.addAction('Cadastro e identificação…',self.edit_selected_device)
         edit_menu.addAction('Acesso Hikvision / SDK…',self.configure_hik_sdk)
@@ -6774,6 +6795,8 @@ class MainWindow(QMainWindow, CameraEventUi):
         edit_menu.aboutToShow.connect(lambda:edit_menu.actions()[1].setVisible(uses_hikvision_recordings(self.db.get_device(self.selected_device_id())) if self.selected_device_id() else False))
         edit.setMenu(edit_menu)
         diag = QPushButton("Diagnóstico…")
+        diag.setIcon(titanium_icon("diagnose", 22))
+        diag.setIconSize(QSize(20, 20))
         diag.setToolTip("Executar diagnóstico somente leitura")
         diag_menu=QMenu(diag)
         diag_menu.addAction('Conectividade do equipamento',self.diagnose_selected)
@@ -6785,16 +6808,22 @@ class MainWindow(QMainWindow, CameraEventUi):
             hik_diag.setVisible(provider in {'hikvision','jfl'});intel_diag.setVisible(provider=='intelbras')
         diag_menu.aboutToShow.connect(filter_diagnostics);diag.setMenu(diag_menu)
         self.channels_button = QPushButton("Canais…")
-        self.channels_button.setToolTip("Ler canais do gravador ou testar o stream da câmera IP selecionada")
+        self.channels_button.setIcon(titanium_icon("channels", 22))
+        self.channels_button.setIconSize(QSize(20, 20))
+        self.channels_button.setToolTip("Manutenção: rever canais ou testar o stream novamente")
         channels_menu=QMenu(self.channels_button)
         channels_menu.addAction('Ver canais cadastrados',self.show_saved_channels)
         channels_menu.addAction('Atualizar canais / testar stream',self.read_device_channels_or_stream)
         self.channels_button.setMenu(channels_menu)
         self.web_button = QPushButton("Abrir Web")
+        self.web_button.setIcon(titanium_icon("link", 22))
+        self.web_button.setIconSize(QSize(20, 20))
         self.web_button.setToolTip("Abrir a interface Web detectada do equipamento no navegador padrão")
         self.web_button.setEnabled(False)
         self.web_button.clicked.connect(self.open_selected_device_web)
         pending_setup = QPushButton("Configurar pendentes")
+        pending_setup.setIcon(titanium_icon("settings", 22))
+        pending_setup.setIconSize(QSize(20, 20))
         pending_setup.setToolTip(
             "Retomar equipamentos já cadastrados/importados que ainda precisam de credencial ou canais validados"
         )
@@ -6802,6 +6831,8 @@ class MainWindow(QMainWindow, CameraEventUi):
         more = QToolButton()
         more.setObjectName("ActionMenu")
         more.setText("Mais ▾")
+        more.setIcon(titanium_icon("more", 22))
+        more.setIconSize(QSize(19, 19))
         more.setPopupMode(QToolButton.InstantPopup)
         device_menu = QMenu(more)
         export_profile = device_menu.addAction("Exportar perfil AKDB")
@@ -6835,9 +6866,13 @@ class MainWindow(QMainWindow, CameraEventUi):
         self.devices_found_status = QLabel("Use Buscar para procurar equipamentos neste Site.")
         self.devices_found_status.setStyleSheet("color:#98b3bc")
         self.devices_find_btn = QPushButton("Buscar / atualizar")
+        self.devices_find_btn.setIcon(titanium_icon("search", 22))
+        self.devices_find_btn.setIconSize(QSize(20, 20))
         self.devices_find_btn.setObjectName("CompactAction")
         self.devices_find_btn.clicked.connect(self.start_discovery)
         self.devices_add_found_btn = QPushButton("Adicionar selecionado")
+        self.devices_add_found_btn.setIcon(titanium_icon("add", 22))
+        self.devices_add_found_btn.setIconSize(QSize(20, 20))
         self.devices_add_found_btn.setObjectName("CompactAction")
         self.devices_add_found_btn.setEnabled(False)
         self.devices_add_found_btn.clicked.connect(self.add_found_from_devices)
@@ -11191,7 +11226,7 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("Artin Sentinel")
     app.setDesktopFileName("artin-sentinel")
-    app.setWindowIcon(QIcon(resource_path("artin-sentinel.png")))
+    app.setWindowIcon(titanium_app_icon())
     app.setStyleSheet(QSS)
     auth = AppAuth(data_dir() / "access.json")
     if not (password_dialog(auth, "Entrar no Sentinel", "Digite a senha para entrar:")
