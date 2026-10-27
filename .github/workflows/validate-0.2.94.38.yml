@@ -73,7 +73,7 @@ jobs:
 
       - name: Broad suite excluding verified 0.2.94.32 baseline debt
         run: |
-          python -m pytest -q \
+          timeout --signal=INT --kill-after=15s 300s python -m pytest -vv -o faulthandler_timeout=60 \
             --deselect 'tests/test_device_intelligence_0214.py::test_hikvision_rtsp_failure_reports_when_isapi_validated_password' \
             --deselect 'tests/test_playback_acceleration_029421.py::test_cloud_speed_command_reaches_native_sdk_without_live_network' \
             --deselect 'tests/test_playback_acceleration_029421.py::test_native_acceleration_advances_picture_while_bounding_output_fps' \
