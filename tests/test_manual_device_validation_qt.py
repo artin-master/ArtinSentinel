@@ -1,34 +1,40 @@
+"""Validate the current unified Equipment 2.0 add dialog under Qt offscreen."""
+import json
 from unittest.mock import Mock
 
 import pytest
 from PySide6.QtCore import QCoreApplication, QEvent, QTimer, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
-    QApplication, QComboBox, QDialog, QDialogButtonBox, QLineEdit,
-    QMainWindow, QMessageBox,
+    QApplication, QDialog, QDialogButtonBox, QMainWindow, QMessageBox,
 )
 
 from artin_sentinel.app import MainWindow
-from artin_sentinel.domain import DeviceKind
+from artin_sentinel.db import Database
 from artin_sentinel.remote_access import ACCESS_PRIVATE
 
 
 @pytest.fixture
-def manual_window(monkeypatch):
+def manual_window(monkeypatch, tmp_path):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     application = QApplication.instance() or QApplication([])
     window = MainWindow.__new__(MainWindow)
     QMainWindow.__init__(window)
-    window.current_site_id = 7
-    window.db = Mock()
-    window.db.upsert_device.return_value = 42
-    window.db.find_device_by_site_ip.return_value = None
-    window.db.get_device.return_value = {"archived": 0}
+    window.db = Database(tmp_path / "manual-equipment.db")
+    window.current_site_id = window.db.list_sites()[0]["id"]
+    window.session_credentials = {}
+    window.credential_store = Mock()
     window.refresh_all = Mock()
+    window.select_configuration_device = Mock()
+    window._pause_monitor_for_recorder = Mock()
+    window._resume_monitor_after_recorder = Mock()
+    window._start_recorder_channel_scan = Mock()
+    window._start_direct_camera_scan = Mock()
     monkeypatch.setattr(QMessageBox, "warning", Mock())
     try:
         yield window, application
     finally:
+        window.db.close()
         window.deleteLater()
         QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
 
@@ -53,57 +59,57 @@ def run_manual_dialog(window, application, interaction):
         raise errors[0]
 
 
-@pytest.mark.parametrize("invalid_index,invalid_value", [
-    (1, "rtsp://host"),
-    (2, "rtsp://dvr.loja.interno/live"),
-    (3, "http://dvr.loja.interno/live"),
+@pytest.mark.parametrize("invalid_host", [
+    "rtsp://host",
+    "rtsp://dvr.loja.interno/live",
+    "http://dvr.loja.interno/live",
 ])
-def test_invalid_manual_address_preserves_dialog_then_saves_once(
-    manual_window, invalid_index, invalid_value,
-):
+def test_invalid_manual_address_preserves_dialog_then_saves_once(manual_window, invalid_host):
     window, application = manual_window
-    values = ["DVR loja", "DVR.LOJA.INTERNO", "https://dvr.loja.interno/config",
-              "rtsp://dvr.loja.interno:554/live"]
 
     def interaction(dialog):
-        fields = [dialog.findChild(QLineEdit,key) for key in ('deviceName','deviceHost','deviceWeb','deviceRtsp')]
-        for field, value in zip(fields, values):
-            field.setText(value)
-        access, kind, protocol = dialog.findChildren(QComboBox)[:3]
-        access.setCurrentIndex(1)
-        kind.setCurrentIndex(2)
-        protocol.setCurrentIndex(2)
-        selections = [combo.currentIndex() for combo in (access, kind, protocol)]
-        fields[invalid_index].setText(invalid_value)
-        expected = list(values)
-        expected[invalid_index] = invalid_value
+        dialog.name.setText("DVR loja")
+        dialog.host.setText(invalid_host)
+        dialog.password.setText("fixture-only-password")
+        dialog.manufacturer.setCurrentText("Hikvision")
+        dialog.kind.setCurrentIndex(dialog.kind.findData("dvr"))
+        dialog.connection.setCurrentIndex(dialog.connection.findData(ACCESS_PRIVATE))
+        dialog.web_port.setValue(8080)
+        dialog.rtsp_port.setValue(8554)
+
         buttons = dialog.findChild(QDialogButtonBox)
-        QTest.mouseClick(buttons.button(QDialogButtonBox.Ok), Qt.LeftButton)
+        QTest.mouseClick(buttons.button(QDialogButtonBox.Save), Qt.LeftButton)
         assert dialog.isVisible()
         assert application.activeModalWidget() is dialog
-        assert [field.text() for field in fields] == expected
-        assert [combo.currentIndex() for combo in (access, kind, protocol)] == selections
-        assert dialog.focusWidget() is fields[invalid_index]
-        assert fields[invalid_index].selectedText() == invalid_value
-        assert not window.db.mock_calls
+        assert dialog.host.text() == invalid_host
+        assert dialog.name.text() == "DVR loja"
+        assert "IP" in dialog.access_state.text() or "endereço" in dialog.access_state.text().lower()
+        assert dialog.focusWidget() is dialog.host
+        assert dialog.host.selectedText() == invalid_host
+        assert window.db.list_devices() == []
         window.refresh_all.assert_not_called()
-        QMessageBox.warning.assert_called_once()
-        fields[invalid_index].setText(values[invalid_index])
-        QTest.mouseClick(buttons.button(QDialogButtonBox.Ok), Qt.LeftButton)
+        QMessageBox.warning.assert_not_called()
+
+        dialog.host.setText("DVR.LOJA.INTERNO")
+        QTest.mouseClick(buttons.button(QDialogButtonBox.Save), Qt.LeftButton)
         assert dialog.result() == QDialog.Accepted
 
     run_manual_dialog(window, application, interaction)
-    window.db.upsert_device.assert_called_once()
-    device = window.db.upsert_device.call_args.args[0]
-    assert device.site_id == 7
-    assert device.name == values[0]
-    assert device.ip == values[1].lower()
-    assert device.web_url == values[2]
-    assert device.rtsp_url == values[3]
-    assert device.kind == DeviceKind.DVR
-    assert device.metadata == {"connection_mode": ACCESS_PRIVATE, "recorder_protocol": "hikvision", "manual_akdb_reference":None}
-    window.db.update_device_identity.assert_called_once()
+
+    rows = window.db.list_devices()
+    assert len(rows) == 1
+    saved = rows[0]
+    assert saved["site_id"] == window.current_site_id
+    assert saved["name"] == "DVR loja"
+    assert saved["ip"] == "dvr.loja.interno"
+    assert saved["kind"] == "dvr"
+    assert saved["web_url"] == "http://dvr.loja.interno:8080"
+    assert saved["rtsp_url"] == "rtsp://dvr.loja.interno:8554"
+    meta = json.loads(saved["metadata_json"])
+    assert meta["connection_mode"] == ACCESS_PRIVATE
+    assert meta["recorder_protocol"] == "hikvision"
     window.refresh_all.assert_called_once_with()
+    window._start_recorder_channel_scan.assert_called_once()
 
 
 @pytest.mark.parametrize("invalid_first", [False, True])
@@ -111,16 +117,17 @@ def test_cancel_manual_dialog_never_writes(manual_window, invalid_first):
     window, application = manual_window
 
     def interaction(dialog):
-        name, ip, web, rtsp = [dialog.findChild(QLineEdit,key) for key in ('deviceName','deviceHost','deviceWeb','deviceRtsp')]
-        name.setText("DVR loja")
-        ip.setText("rtsp://host" if invalid_first else "192.0.2.10")
+        dialog.name.setText("DVR loja")
+        dialog.host.setText("rtsp://host" if invalid_first else "192.0.2.10")
+        dialog.password.setText("fixture-only-password")
         buttons = dialog.findChild(QDialogButtonBox)
         if invalid_first:
-            QTest.mouseClick(buttons.button(QDialogButtonBox.Ok), Qt.LeftButton)
+            QTest.mouseClick(buttons.button(QDialogButtonBox.Save), Qt.LeftButton)
             assert dialog.isVisible()
+            assert window.db.list_devices() == []
         QTest.mouseClick(buttons.button(QDialogButtonBox.Cancel), Qt.LeftButton)
         assert dialog.result() == QDialog.Rejected
 
     run_manual_dialog(window, application, interaction)
-    assert not window.db.mock_calls
+    assert window.db.list_devices() == []
     window.refresh_all.assert_not_called()
