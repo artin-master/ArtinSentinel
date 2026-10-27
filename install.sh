@@ -6,6 +6,7 @@ VENV="$HOME/.local/share/artin-sentinel/runtime"
 BIN="$HOME/.local/bin"
 APPS="$HOME/.local/share/applications"
 ICONS="$HOME/.local/share/icons/hicolor/512x512/apps"
+ICONS_SVG="$HOME/.local/share/icons/hicolor/scalable/apps"
 DATA="$HOME/.local/share/artin-sentinel"
 NEW_VERSION="0.2.94.38"
 PREV_VERSION=""
@@ -375,7 +376,7 @@ fi
 
 require_sentinel_closed || exit $?
 
-mkdir -p "$BIN" "$APPS" "$ICONS" "$(dirname "$VENV")"
+mkdir -p "$BIN" "$APPS" "$ICONS" "$ICONS_SVG" "$(dirname "$VENV")"
 if [[ ! -d "$VENV" ]]; then
   python3 -m venv "$VENV"
 fi
@@ -398,7 +399,8 @@ then
   exit 1
 fi
 
-cp "$ROOT/artin_sentinel/resources/artin-sentinel.png" "$ICONS/artin-sentinel.png"
+rm -f "$ICONS/artin-sentinel.png"
+cp "$ROOT/artin_sentinel/resources/artin-sentinel.svg" "$ICONS_SVG/artin-sentinel.svg"
 
 cat > "$BIN/artin-sentinel" <<EOF2
 #!/usr/bin/env bash
@@ -474,7 +476,7 @@ echo
 echo "Artin Sentinel $NEW_VERSION instalado/atualizado."
 echo "Launcher: $BIN/artin-sentinel"
 echo "Menu: $APPS/artin-sentinel.desktop"
-echo "Ícone: $ICONS/artin-sentinel.png"
+echo "Ícone: $ICONS_SVG/artin-sentinel.svg"
 
 if [[ -n "$PREV_VERSION" && "$PREV_VERSION" != "$NEW_VERSION" ]]; then
   mkdir -p "$DATA"
