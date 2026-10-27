@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
 )
 
 from .equipment_policy import access_policy
-from .remote_access import ACCESS_CONNECTOR, ACCESS_LOCAL, ACCESS_PRIVATE
+from .remote_access import ACCESS_CONNECTOR, ACCESS_LOCAL, ACCESS_PRIVATE, validate_recorder_host
 
 
 @dataclass(slots=True)
@@ -192,6 +192,14 @@ class EquipmentEditorDialog(QDialog):
             self.access_state.setText("Informe o IP/host antes de salvar.")
             self.host.setFocus()
             return
+        if not cloud:
+            try:
+                validate_recorder_host(host)
+            except ValueError as exc:
+                self.access_state.setText(str(exc))
+                self.host.setFocus()
+                self.host.selectAll()
+                return
         maker=self.manufacturer.currentText().strip()
         kind=str(self.kind.currentData() or "unknown")
         p=access_policy(maker,kind)
