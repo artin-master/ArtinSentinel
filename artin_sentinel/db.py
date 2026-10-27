@@ -1183,6 +1183,46 @@ class Database:
         )
         self.conn.commit()
 
+    def update_device_connection(
+        self, device_id: int, *, ip: str, port: int | None = None,
+        provider: str = "generic", web_url: str = "", rtsp_url: str = "",
+        metadata_patch: dict | None = None,
+    ):
+        """Update the operator-owned connection fields without creating a duplicate row."""
+        row = self.get_device(int(device_id))
+        if not row:
+            raise ValueError("Equipamento não encontrado.")
+        ip = str(ip or "").strip()
+        if not ip:
+            raise ValueError("Endereço do equipamento vazio.")
+        conflict = self.conn.execute(
+            """SELECT id FROM devices
+               WHERE site_id=? AND ip=? AND id<>? AND correlated_to=0
+               ORDER BY id LIMIT 1""",
+            (int(row["site_id"]), ip, int(device_id)),
+        ).fetchone()
+        if conflict:
+            raise ValueError("Já existe outro equipamento com este endereço neste Site.")
+        try:
+            metadata = json.loads(row["metadata_json"] or "{}")
+            if not isinstance(metadata, dict):
+                metadata = {}
+        except (TypeError, ValueError):
+            metadata = {}
+        if metadata_patch:
+            metadata.update(metadata_patch)
+        self.conn.execute(
+            """UPDATE devices
+               SET ip=?,port=?,provider=?,web_url=?,rtsp_url=?,metadata_json=?,updated_at=?
+               WHERE id=?""",
+            (
+                ip, port, str(provider or "generic").strip() or "generic",
+                str(web_url or "").strip(), str(rtsp_url or "").strip(),
+                json.dumps(metadata, ensure_ascii=False), utcnow(), int(device_id),
+            ),
+        )
+        self.conn.commit()
+
     def update_device_credential_meta(self, device_id: int, username: str, saved: bool):
         self.conn.execute(
             "UPDATE devices SET credential_username=?,credential_saved=?,updated_at=? WHERE id=?",
