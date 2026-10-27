@@ -97,31 +97,34 @@ def test_equipment_selection_double_click_and_context_menu_are_preserved(equipme
 
 def test_equipment_sections_and_actions_follow_requested_hierarchy(equipment_window):
     window, _application = equipment_window
-    sections = window.findChild(QSplitter, "equipmentSectionsSplitter")
-
+    sections = window.dev_table.parentWidget().parentWidget()
+    assert isinstance(sections, QSplitter)
     assert sections.count() == 2
-    registered_splitter = sections.widget(0)
-    registered = registered_splitter.widget(0)
-    details = registered_splitter.widget(1)
-    discovered = sections.widget(1)
+    registered, details = sections.widget(0), sections.widget(1)
+    discovered = window.discovery_panel
+
+    # Equipamentos 2.0 keeps only the inventory and details on the main screen.
     assert window.dev_table.parentWidget() == registered
-    assert window.devices_found_table.parentWidget() == discovered
     assert window.web_button.parentWidget() == registered
+    assert window.device_detail_name in details.findChildren(type(window.device_detail_name))
+    assert discovered.parentWidget() == window.discovery_dialog
+    assert not window.discovery_dialog.isModal()
+    assert not window.discovery_dialog.isVisible()
+    assert window.devices_found_table.parentWidget() == discovered
     assert window.devices_find_btn.parentWidget() == discovered
+    assert window.device_scope_combo.currentData() == "all"
 
     registered_layout = registered.layout()
     assert registered_layout.indexOf(window.device_inventory_count) < registered_layout.indexOf(window.device_filter)
     assert registered_layout.indexOf(window.device_filter) < registered_layout.indexOf(window.dev_table)
-    assert window.device_detail_name in details.findChildren(type(window.device_detail_name))
-    assert window.site_combo.parentWidget() == sections.parentWidget()
-    assert sections.parentWidget().layout().indexOf(sections) > 0
 
     found_labels = [action.text() for action in window._discovery_more_menu.actions() if not action.isSeparator()]
     assert found_labels == ["Canais", "Excluir"]
     action_row = discovered.layout().itemAt(1).layout()
-    action_labels = [action_row.itemAt(i).widget().text() for i in range(action_row.count() - 1)]
+    action_labels = [action_row.itemAt(i).widget().text() for i in range(5)]
     assert action_labels == [
-        "Buscar / atualizar", "Adicionar selecionado", "Web do encontrado", "Relatório AKDB", "Mais ▾",
+        "Buscar / atualizar", "Adicionar por endereço", "Usar selecionado",
+        "Web do encontrado", "Relatório AKDB",
     ]
 
 
@@ -147,22 +150,26 @@ def test_equipment_action_bars_remain_inside_sections_at_small_window_size(equip
     window, application = equipment_window
     window.resize(760, 620)
     application.processEvents()
-    sections = window.findChild(QSplitter, "equipmentSectionsSplitter")
-    registered, discovered = sections.widget(0), sections.widget(1)
-    registered_inventory = registered.widget(0)
-    assert registered.width() > 0 and discovered.width() > 0
+    sections = window.dev_table.parentWidget().parentWidget()
+    assert isinstance(sections, QSplitter)
+    registered_inventory, details = sections.widget(0), sections.widget(1)
+    discovered = window.discovery_panel
+    assert registered_inventory.width() > 0 and details.width() > 0
+    assert window.discovery_dialog is not None
+    assert discovered.parentWidget() == window.discovery_dialog
+    assert not window.discovery_dialog.isVisible()
     assert window.dev_table.horizontalScrollMode() == QAbstractItemView.ScrollPerPixel
     assert window.devices_found_table.horizontalScrollMode() == QAbstractItemView.ScrollPerPixel
     for parent, buttons in (
         (registered_inventory, [window.web_button]),
-        (discovered, [window.devices_find_btn, window.devices_add_found_btn,
-                      window.devices_web_found_btn, window.devices_report_found_btn,
+        (discovered, [window.devices_find_btn, window.devices_manual_add_btn,
+                      window.devices_add_found_btn, window.devices_web_found_btn,
+                      window.devices_report_found_btn,
                       next(button for button in discovered.findChildren(QToolButton)
                            if button.text() == "Mais ▾")]),
     ):
         for button in buttons:
-            if button is not None:
-                assert button.parentWidget() == parent
+            assert button.parentWidget() == parent
 
 
 @pytest.mark.parametrize(
