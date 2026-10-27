@@ -57,7 +57,7 @@ def test_available_only_channels_hide_stale_without_deleting_history(tmp_path: P
 
 def test_live_ui_uses_native_audio_icon_and_persistent_ptz_status():
     source = Path("artin_sentinel/app.py").read_text(encoding="utf-8")
-    assert 'self.audio_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaVolume))' in source
+    assert 'self.audio_button.setIcon(titanium_icon("audio", 18))' in source
     assert 'self.audio_button.setText("🔊")' not in source
     assert 'text = "PTZ disponível"' in source
     assert 'self.ptz_status_label.setText("PTZ disponível")' in source
