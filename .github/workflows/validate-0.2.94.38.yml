@@ -43,7 +43,7 @@ jobs:
 
       - name: Equipment 2.0 and secure-transfer regression
         run: |
-          python -m pytest -q \
+          timeout --signal=INT --kill-after=15s 120s python -m pytest -v -o faulthandler_timeout=30 \
             tests/test_secure_transfer_029438.py \
             tests/test_equipment_policy_029438.py \
             tests/test_equipment_connection_029438.py \
@@ -51,7 +51,8 @@ jobs:
             tests/test_import_onboarding_029433.py \
             tests/test_selective_transfer_029427.py \
             tests/test_transfer_ui_029427.py \
-            tests/test_config_portability_0286.py
+            tests/test_config_portability_0286.py \
+            tests/test_web_service_integration.py
 
       - name: Hikvision affected regression
         run: |
