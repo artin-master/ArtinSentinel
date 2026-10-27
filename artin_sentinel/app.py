@@ -8691,6 +8691,28 @@ class MainWindow(QMainWindow, CameraEventUi):
                 self._import_onboarding_failed.append(device_id)
                 continue
             self._import_onboarding_current = device_id
+            credentials = self._credentials_for_device(device_id)
+            if credentials:
+                username, secret = credentials
+                self.bottom_notice.setText(
+                    f"Configuração pós-importação • {device['name']} • validando acesso e canais automaticamente"
+                )
+                operational = resolve_operational_identity(device)
+                self._pause_monitor_for_recorder()
+                if operational.kind == "camera":
+                    QTimer.singleShot(
+                        0, lambda did=device_id, dev=device, u=username, s=secret:
+                        self._start_direct_camera_scan(did, dev, u, s)
+                    )
+                elif operational.kind in {"dvr", "nvr", "xvr"}:
+                    QTimer.singleShot(
+                        0, lambda did=device_id, dev=device, u=username, s=secret:
+                        self._start_recorder_channel_scan(did, dev, u, s)
+                    )
+                else:
+                    self._resume_monitor_after_recorder()
+                    self._complete_import_onboarding_device(device_id, False)
+                return
             self.bottom_notice.setText(
                 f"Configuração pós-importação • {device['name']} • informe o acesso para validar os canais"
             )
