@@ -1,18 +1,57 @@
-# Artin Sentinel 0.2.94.32 — acesso, componentes e vídeo
+# Artin Sentinel 0.2.94.38 — Equipamentos 2.0 + Titânio/Ciano
 
-Instalador completo de teste para Fedora, Mint/Ubuntu e Arch, Linux x86_64.
+Instalador completo de teste para Fedora, Mint/Ubuntu e Arch Linux x86_64.
 
-- **Configuração → Componentes e SDKs…**: instalação, carga local, versões e sessões.
-- **Diagnóstico e atividade…**: erros e acesso efetivamente utilizado.
-- Cadastro orientado pela marca, menus agrupados e indicadores de codec/resolução.
-- Hikvision SDK: prévia Main 720p, aceleração nativa até 8× e exportação Original/Compacto.
-- Exportação confere vídeo/duração antes de publicar e informa o caminho final.
+Esta candidata consolida o cadastro e a manutenção de equipamentos numa única experiência, sem alterar os motores proprietários já existentes.
 
-Leia o [roteiro completo de teste](docs/TESTES_0.2.94.32.md).
-Aceleração e exportação Hikvision SDK precisam de confirmação no DVR físico.
-Áudio de escuta por esse SDK, Substream do aparelho de teste e Hik-Connect permanecem pendentes.
-Os acessos existentes não são migrados automaticamente. O SDK oficial não acompanha o ZIP.
+- **Equipamentos 2.0:** Adicionar, dispositivo descoberto e Editar convergem para a mesma janela de cadastro/acesso.
+- **Descoberta flutuante:** “Dispositivos localizados” não ocupa mais espaço permanente na tela Equipamentos.
+- **Marca/tipo orientam o acesso:** Hikvision/HiLook usa HCNetSDK/ISAPI/RTSP quando aplicável; Intelbras/Dahua usa NetSDK/HTTP/RTSP; genéricos ficam em ONVIF/RTSP até homologação.
+- **Salvar e validar acesso:** ao incluir ou alterar equipamento local, o Sentinel testa a credencial e inicia a leitura de canais/stream automaticamente.
+- **Transferência segura:** opcionalmente leva credenciais em pacote `.asx` criptografado e restaura as senhas no cofre do PC de destino.
+- **Titânio + Ciano:** escudo e ícones vetoriais próprios voltam a ser o padrão visual do Sentinel.
+- **Hikvision:** mantém ISAPI/RTSP e HCNetSDK isolado, incluindo busca/reprodução/exportação de gravações.
+- **Intelbras:** NetSDK, Cloud, Live View, reprodução e exportação da base anterior permanecem preservados.
 
+Leia `docs/EQUIPMENT_ONBOARDING_029438.md` para o roteiro funcional desta candidata.
+
+## Instalar
+
+Feche o Sentinel, extraia o pacote em uma pasta e execute:
+
+```bash
+bash install.sh
+```
+
+Não use `sudo`. O instalador reaproveita o runtime, banco, SDKs e configurações existentes quando compatíveis.
+
+## Exportar para outro PC
+
+Em **Configuração → Exportar equipamentos…** selecione os Sites/equipamentos e escolha se deseja levar canais, nomes/apelidos, preferências de stream e layouts.
+
+Há dois formatos:
+
+- **Pacote seguro `.asx`**: pode incluir as credenciais disponíveis no cofre/sessão do Sentinel. O arquivo inteiro é protegido com AES-256-GCM e uma senha de transferência informada pelo operador. A senha de transferência não é gravada.
+- **Inventário `.json`**: mantém a compatibilidade anterior e nunca inclui senhas/tokens.
+
+Ao exportar com credenciais, o Sentinel avisa se algum equipamento selecionado não possui senha disponível. É possível continuar levando apenas as credenciais encontradas.
+
+## Importar equipamentos
+
+Em **Configuração → Importar equipamentos…** selecione `.asx` ou `.json`.
+
+Para `.asx`, o Sentinel pede uma única senha de transferência, descriptografa o conteúdo em memória e regrava cada senha compatível no keyring/cofre local. Cadastros já existentes são reutilizados; não são duplicados.
+
+Depois da importação:
+
+- se a credencial foi restaurada, o Sentinel testa o acesso e atualiza canais/stream automaticamente;
+- se faltar credencial, abre o fluxo de configuração somente para os equipamentos pendentes;
+- conflitos de identidade continuam bloqueados para impedir associação ao equipamento errado;
+- o Site operacional não é alterado apenas para administrar um equipamento importado.
+
+A visão **Todos os Sites** em Configuração → Equipamentos permite localizar equipamentos importados de outro Site sem misturar os contadores/monitoramento do Site ativo.
+
+> Arquivos JSON antigos que nunca continham senhas não podem recuperar essas senhas retroativamente. Para transportar credenciais, faça uma nova exportação `.asx` a partir de um Sentinel que ainda possua as senhas no cofre ou na sessão.
 ## Histórico da base
 
 # Artin Sentinel 0.2.94.30 — Topway IP e estabilidade do Live View
@@ -88,58 +127,9 @@ bash install.sh
 Os caminhos dnf/apt/pacman e os dados existentes são preservados. Não há dependência
 nova. Runtime, NetSDK e ponte Wine válidos continuam sendo reaproveitados.
 
-## Exportar para outro PC
+## Transferência nas versões históricas
 
-Em **Configuração → Exportar equipamentos…**:
-
-1. Se o controle de permissões estiver ativo, entre como administrador.
-2. Marque os Sites/DVRs/câmeras que deseja levar. Um Site sem equipamentos marcados
-   não entra no arquivo. Os equipamentos arquivados não são exportados nesta tela.
-3. Escolha se deseja incluir canais, nomes/apelidos, preferências de stream e layouts.
-   Canais inclui os canais cadastrados dos equipamentos marcados. Layouts ficam
-   desmarcados por padrão; suas posições só referenciam os equipamentos selecionados.
-4. Salve o arquivo JSON e leve-o ao PC de destino.
-
-A identificação, endereço, portas conhecidas, serial, MAC e UUID disponíveis
-acompanham o inventário. Nomes/apelidos são opcionais; nomes dos Sites organizam o
-arquivo. Senhas de DVR, tokens, senhas de operador/administrador, permissões e URLs
-de vídeo não entram no arquivo. O JSON é gravado com acesso restrito ao usuário local.
-
-## Importar somente os novos
-
-**Atualize o Sentinel dos dois PCs para .27 ou posterior.** O formato novo é
-`artin-sentinel-portable-v2`; versões anteriores podem recusá-lo. A .27 também
-aceita o formato v1 dos arquivos antigos.
-
-Em **Configuração → Importar equipamentos…**, escolha o JSON. A prévia não faz
-escritas nem conexões com DVRs. Ela mostra:
-
-- **Novo:** pode ser marcado para inclusão.
-- **Já cadastrado:** será preservado, inclusive seus canais, nomes e credenciais.
-- **Conflito:** será ignorado para evitar escolher automaticamente o equipamento errado.
-
-A comparação usa serial, UUID e MAC válidos quando presentes, além de Site,
-endereço, fabricante/modelo e portas. IP igual em Sites diferentes não significa
-necessariamente o mesmo equipamento. Identificadores divergentes, Sites arquivados
-ou ambíguos e identidades repetidas no próprio arquivo geram conflitos. Quando
-faltam identificadores, um endereço já ocupado no Site é tratado de forma conservadora.
-
-Desmarque os novos que não deseja incluir e clique **Importar N novo(s)**.
-Equipamentos já existentes não recebem canais novos ou alterações de configuração.
-Nenhum equipamento ou Site arquivado é restaurado automaticamente. Reimportar o
-mesmo arquivo não duplica o que já foi incluído.
-
-Layouts existentes não são sobrescritos. Layouts ausentes referenciam apenas os
-novos equipamentos importados; posições de cadastros não incluídos ficam vazias.
-O inventário é revalidado na confirmação; se mudou desde a prévia, abra a prévia
-novamente. Erro de gravação no banco desfaz a importação inteira.
-
-Após importar, informe as credenciais no destino e faça a leitura/validação dos
-canais. Equipamentos e canais chegam sem confirmação de acesso e sem imagem
-marcada como validada. Modos local, rede privada/conector e Cloud Intelbras são
-preservados quando disponíveis no arquivo v2; dependências e túneis do PC de origem
-não são transferidos. Um conector/ponte externo precisa ser preparado no destino.
-
+As notas abaixo descrevem comportamentos de versões anteriores. A 0.2.94.38 substitui o fluxo antigo pela transferência segura descrita no início deste README. O JSON legado continua disponível sem credenciais.
 ## Próxima rodada: Hikvision e HiLook
 
 A validação de campo será feita na Mallet. Consulte
