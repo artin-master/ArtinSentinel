@@ -317,7 +317,10 @@ def test_modal_selector_rechecks_device_and_site_before_opening(window, monkeypa
     app_module.QDesktopServices.openUrl.assert_not_called()
 
 
-def test_unknown_discovery_remains_in_memory_then_inclusion_persists_only_confirmations(window):
+def test_unknown_discovery_remains_in_memory_then_inclusion_persists_only_confirmations(window, monkeypatch):
+    from PySide6.QtWidgets import QDialog
+    from artin_sentinel.equipment_editor import EquipmentEditorDialog
+
     found = device(window.db, web_url="http://192.0.2.10/legacy")
     report(window, found, [check(), check(scheme="https", port=443, confirmed=False)])
     assert window.db.list_devices() == []
@@ -325,11 +328,27 @@ def test_unknown_discovery_remains_in_memory_then_inclusion_persists_only_confir
     assert window.devices_web_found_btn.isEnabled()
     window.open_discovered_device_web()
     assert app_module.QDesktopServices.openUrl.call_args[0][0].toString() == "http://192.0.2.10:80/"
+
+    # Equipamentos 2.0 now requires credentials in its unified modal editor;
+    # drive that approved UI path without opening an interactive modal in CI.
+    def accept_editor(dialog):
+        dialog.password.setText("fixture-only-password")
+        dialog.kind.setCurrentIndex(dialog.kind.findData("camera"))
+        dialog._accept()
+        return QDialog.Accepted
+
+    monkeypatch.setattr(EquipmentEditorDialog, "exec", accept_editor)
+    window.session_credentials = {}
+    window.select_configuration_device = Mock()
+    window._pause_monitor_for_recorder = Mock()
+    window._start_direct_camera_scan = Mock()
     window.add_discovered_selected()
+
     owner = window.db.find_device_by_site_ip(window.current_site_id, found.ip)["id"]
     rows = window.db.list_device_web_services(owner, confirmed_only=False)
     assert len(rows) == 1 and rows[0]["scheme"] == "http"
-    assert window.db.get_device(owner)["web_url"] == found.web_url
+    assert window.db.get_device(owner)["web_url"] == "http://192.0.2.10"
+    window._start_direct_camera_scan.assert_called_once()
 
 
 def test_found_web_button_disabled_for_tcp_and_hint_without_http_confirmation(window):
