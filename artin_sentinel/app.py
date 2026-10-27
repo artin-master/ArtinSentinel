@@ -6757,10 +6757,12 @@ class MainWindow(QMainWindow, CameraEventUi):
         self.build_sites_section(layout)
 
         primary = QHBoxLayout()
-        add = QPushButton("Adicionar ▾")
-        add.setToolTip("Adicionar equipamento manualmente")
+        add = QPushButton("Adicionar / localizar ▾")
+        add.setToolTip("Localizar na rede ou cadastrar um equipamento pelo endereço")
         add_menu=QMenu(add)
-        add_menu.addAction('Equipamento local / VPN…',self.add_device_manual)
+        add_menu.addAction('Localizar na rede…',self.show_discovery_dialog)
+        add_menu.addAction('Adicionar por endereço…',self.add_device_manual)
+        add_menu.addSeparator()
         add_menu.addAction('Intelbras Cloud…',self.add_intelbras_cloud_bridge)
         add.setMenu(add_menu)
         edit = QPushButton("Editar")
@@ -6822,9 +6824,7 @@ class MainWindow(QMainWindow, CameraEventUi):
         primary.addWidget(more)
         primary.addStretch()
 
-        # Discovery, evidence and enrollment share this single device manager.
-        device_sections = QSplitter(Qt.Vertical)
-        device_sections.setObjectName("equipmentSectionsSplitter")
+        # Discovery is modeless/floating so the equipment workspace keeps its full height.
         found = QFrame()
         found.setObjectName("SourcePane")
         found_layout = QVBoxLayout(found)
@@ -6903,7 +6903,20 @@ class MainWindow(QMainWindow, CameraEventUi):
         details_button.toggled.connect(self.devices_discovery_log.setVisible)
         found_layout.addWidget(details_button, 0, Qt.AlignLeft)
         found_layout.addWidget(self.devices_discovery_log)
-        found.setMinimumHeight(400)
+        found.setMinimumSize(900, 480)
+        self.discovery_panel = found
+        self.discovery_dialog = QDialog(self)
+        self.discovery_dialog.setWindowTitle("Localizar equipamentos na rede")
+        self.discovery_dialog.setModal(False)
+        self.discovery_dialog.resize(1120, 680)
+        discovery_outer = QVBoxLayout(self.discovery_dialog)
+        discovery_outer.setContentsMargins(8, 8, 8, 8)
+        discovery_outer.addWidget(found)
+        close_discovery = QDialogButtonBox(QDialogButtonBox.Close)
+        close_discovery.rejected.connect(self.discovery_dialog.hide)
+        close_discovery.clicked.connect(self.discovery_dialog.hide)
+        discovery_outer.addWidget(close_discovery)
+
         device_splitter = QSplitter(Qt.Horizontal)
 
         inventory = QFrame()
@@ -7027,18 +7040,23 @@ class MainWindow(QMainWindow, CameraEventUi):
         device_splitter.setStretchFactor(0, 3)
         device_splitter.setStretchFactor(1, 2)
         device_splitter.setSizes([780, 420])
-        device_sections.addWidget(device_splitter)
-        device_sections.addWidget(found)
-        device_sections.setStretchFactor(0, 3)
-        device_sections.setStretchFactor(1, 2)
-        device_sections.setSizes([460, 400])
-        device_sections.setMinimumHeight(740)
-        layout.addWidget(device_sections, 1)
+        layout.addWidget(device_splitter, 1)
         self.build_equipment_log_panel(layout)
-        body.setMinimumHeight(910)
+        body.setMinimumHeight(620)
         scroller.setWidget(body)
         outer.addWidget(scroller)
         self.config_tabs.addTab(tab, "Equipamentos")
+
+    def show_discovery_dialog(self):
+        """Open the network discovery workspace without consuming equipment-screen space."""
+        dialog = getattr(self, "discovery_dialog", None)
+        if dialog is None:
+            return
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+        if not getattr(self, "discovery_results", None):
+            self.devices_found_status.setText("Use Buscar / atualizar para procurar equipamentos neste Site.")
 
     def build_equipment_log_panel(self, layout):
         toggle = QToolButton()
