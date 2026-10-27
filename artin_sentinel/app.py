@@ -1525,8 +1525,8 @@ class DetachedMonitorWindow(QMainWindow):
         self.layout_combo.currentIndexChanged.connect(self.change_layout)
         tb.addWidget(self.layout_combo)
         fs = QToolButton(); fs.setObjectName("ToolbarIconAction"); fs.setToolTip("Tela cheia do mosaico")
-        try: fs.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_TitleBarMaxButton))
-        except Exception: fs.setText("⛶")
+        fs.setIcon(titanium_icon("live", 22))
+        fs.setIconSize(QSize(20, 20))
         fs.clicked.connect(self.toggle_mosaic_fullscreen); tb.addWidget(fs)
         outer.addWidget(self.toolbar_widget)
 
@@ -2388,12 +2388,27 @@ class MainWindow(QMainWindow, CameraEventUi):
         btn.setObjectName("ToolbarIconAction")
         btn.setToolTip(tooltip)
         btn.setFixedSize(36, 34)
-        try:
-            pixmap = getattr(QStyle.StandardPixmap, standard_name)
-            btn.setIcon(self._live_toolbar_icon(pixmap))
-            btn.setIconSize(QSize(19, 19))
-        except Exception:
-            btn.setText(fallback)
+        icon_map = {
+            "SP_DialogSaveButton": "camera",
+            "SP_MediaRecord": "record",
+            "SP_TrashIcon": "delete",
+            "SP_TitleBarNormalButton": "live",
+            "SP_TitleBarMaxButton": "live",
+            "SP_MediaPlay": "play",
+            "SP_MediaStop": "stop",
+            "SP_MediaVolume": "audio",
+            "SP_FileDialogDetailedView": "channels",
+        }
+        if standard_name in icon_map:
+            btn.setIcon(titanium_icon(icon_map[standard_name], 22))
+            btn.setIconSize(QSize(20, 20))
+        else:
+            try:
+                pixmap = getattr(QStyle.StandardPixmap, standard_name)
+                btn.setIcon(self._live_toolbar_icon(pixmap))
+                btn.setIconSize(QSize(19, 19))
+            except Exception:
+                btn.setText(fallback)
         btn.clicked.connect(handler)
         btn.setAccessibleName(tooltip)
         return btn
@@ -2519,13 +2534,11 @@ class MainWindow(QMainWindow, CameraEventUi):
         photo = self._toolbar_icon_button("SP_DialogSaveButton", "◉", "Salvar foto do canal selecionado", self.save_live_photo)
         actions.addWidget(photo)
         self.record_button = self._toolbar_icon_button("SP_MediaRecord", "●", "Iniciar gravação do canal selecionado", self.toggle_manual_recording)
-        self.record_button.setIcon(QIcon())
-        self.record_button.setText("●")
         actions.addWidget(self.record_button)
 
         self.inspector_toggle = QToolButton()
         self.inspector_toggle.setObjectName("ToolbarIconAction")
-        self.inspector_toggle.setIcon(self._live_toolbar_icon(QStyle.StandardPixmap.SP_FileDialogDetailedView))
+        self.inspector_toggle.setIcon(titanium_icon("channels", 22))
         self.inspector_toggle.setIconSize(QSize(19, 19))
         self.inspector_toggle.setFixedSize(36, 34)
         self.inspector_toggle.setToolTip("Mostrar ou recolher o painel lateral de controles")
@@ -4072,7 +4085,7 @@ class MainWindow(QMainWindow, CameraEventUi):
         ctx = self._audio_context_for_tile(tile) if tile else None
         if not ctx:
             self.listen_audio_btn.setEnabled(False)
-            self.listen_audio_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaVolume))
+            self.listen_audio_btn.setIcon(titanium_icon("audio", 20))
             self.listen_audio_btn.setToolTip("Áudio não confirmado para a seleção")
             self.audio_volume_slider.setEnabled(False)
             talk_running = self.talkback_session is not None
@@ -4135,11 +4148,7 @@ class MainWindow(QMainWindow, CameraEventUi):
                 self.audio_talkback_badge.hide()
         active = bool(tile and self.live_audio_tile_index == tile.index)
         self.listen_audio_btn.setEnabled(can_listen)
-        self.listen_audio_btn.setIcon(
-            self.style().standardIcon(
-                QStyle.StandardPixmap.SP_MediaStop if active else QStyle.StandardPixmap.SP_MediaVolume
-            )
-        )
+        self.listen_audio_btn.setIcon(titanium_icon("stop" if active else "audio", 20))
         if active:
             self.listen_audio_btn.setToolTip("Parar áudio")
         elif info.get("can_listen"):
@@ -4612,7 +4621,7 @@ class MainWindow(QMainWindow, CameraEventUi):
         audio_row.addWidget(audio_label)
         self.listen_audio_btn = QToolButton()
         self.listen_audio_btn.setObjectName("ToolbarIconAction")
-        self.listen_audio_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaVolume))
+        self.listen_audio_btn.setIcon(titanium_icon("audio", 20))
         self.listen_audio_btn.setToolTip("Ouvir janela selecionada")
         self.listen_audio_btn.setEnabled(False)
         self.listen_audio_btn.clicked.connect(self.toggle_selected_tile_audio)
@@ -5586,7 +5595,7 @@ class MainWindow(QMainWindow, CameraEventUi):
         controls = QHBoxLayout()
         self.playback_play_btn = QToolButton()
         self.playback_play_btn.setObjectName("PlaybackPlayAction")
-        self.playback_play_btn.setIcon(self._tinted_icon(QStyle.StandardPixmap.SP_MediaPlay, "#37c8e8"))
+        self.playback_play_btn.setIcon(titanium_icon("play", 24))
         self.playback_play_btn.setIconSize(QSize(20, 20))
         self.playback_play_btn.setToolTip("Reproduzir o trecho selecionado")
         self.playback_play_btn.setAccessibleName("Reproduzir gravação")
@@ -5595,7 +5604,7 @@ class MainWindow(QMainWindow, CameraEventUi):
         controls.addWidget(self.playback_play_btn)
         self.playback_stop_btn = QToolButton()
         self.playback_stop_btn.setObjectName("PlaybackStopAction")
-        self.playback_stop_btn.setIcon(self._tinted_icon(QStyle.StandardPixmap.SP_MediaStop, "#f2a4a4"))
+        self.playback_stop_btn.setIcon(titanium_icon("stop", 24))
         self.playback_stop_btn.setIconSize(QSize(20, 20))
         self.playback_stop_btn.setToolTip("Parar reprodução")
         self.playback_stop_btn.setAccessibleName("Parar reprodução")
@@ -5630,7 +5639,7 @@ class MainWindow(QMainWindow, CameraEventUi):
         controls.addStretch()
         self.playback_export_btn = QPushButton("Baixar MP4")
         self.playback_export_btn.setObjectName("PlaybackExport")
-        self.playback_export_btn.setIcon(self._tinted_icon(QStyle.StandardPixmap.SP_DialogSaveButton, "#f2d590"))
+        self.playback_export_btn.setIcon(titanium_icon("export", 22))
         self.playback_export_btn.setToolTip("Salvar o trecho selecionado em MP4")
         self.playback_export_btn.setEnabled(False)
         self.playback_export_btn.clicked.connect(self.export_selected_recording)
