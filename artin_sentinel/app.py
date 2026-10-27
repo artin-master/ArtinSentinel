@@ -10872,6 +10872,231 @@ class MainWindow(QMainWindow, CameraEventUi):
         self.db.close()
         super().closeEvent(event)
 
+    def _site_name(self, site_id: int | None) -> str:
+        if site_id is None:
+            return "—"
+        for site in self.db.list_sites(include_archived=True):
+            if int(site["id"]) == int(site_id):
+                return str(site["name"])
+        return "Site"
+
+    @staticmethod
+    def _host_authority(host: str) -> str:
+        host = str(host or "").strip()
+        return f"[{host}]" if ":" in host and not host.startswith("[") else host
+
+    def _open_unified_equipment_editor(self, *, device_id=None, discovered=None):
+        from .equipment_editor import EquipmentEditorDialog
+        device = self.db.get_device(int(device_id)) if device_id is not None else None
+        site_id = int(device["site_id"]) if device is not None else int(self.current_site_id)
+        dialog = EquipmentEditorDialog(
+            self, device=device, discovered=discovered, site_name=self._site_name(site_id)
+        )
+        if device is not None:
+            session_user, session_secret = self.session_credentials.get(int(device["id"]), ("", ""))
+            saved_secret = self.credential_store.get_password(int(device["id"])) if device["credential_saved"] else None
+            dialog.set_saved_secret(
+                str(device["credential_username"] or session_user or "admin"),
+                str(saved_secret if saved_secret is not None else session_secret or ""),
+                saved=bool(device["credential_saved"] and saved_secret is not None),
+            )
+            try:
+                meta = json.loads(device["metadata_json"] or "{}")
+            except (TypeError, ValueError):
+                meta = {}
+            if isinstance(meta, dict):
+                idx = dialog.connection.findData(meta.get("connection_mode", ACCESS_LOCAL))
+                if idx >= 0:
+                    dialog.connection.setCurrentIndex(idx)
+                dialog.rtsp_port.setValue(int(meta.get("recorder_rtsp_port") or forwarded_ports(
+                    device["ip"], device["web_url"], device["rtsp_url"]
+                )[1]))
+                dialog.channel_limit.setValue(int(meta.get("channel_scan_limit") or min(
+                    64, max(1, len(self.db.list_recorder_channels(int(device["id"]))) or 16)
+                )))
+                hik = meta.get("hik_sdk") if isinstance(meta.get("hik_sdk"), dict) else {}
+                if hik.get("port"):
+                    dialog.sdk_port.setValue(int(hik["port"]))
+                elif meta.get("netsdk_port"):
+                    dialog.sdk_port.setValue(int(meta["netsdk_port"]))
+        if dialog.exec() != QDialog.Accepted or dialog.result_data is None:
+            return
+        result = dialog.result_data
+        if result.use_intelbras_cloud:
+            if device is None:
+                self.add_intelbras_cloud_bridge()
+            else:
+                self.configure_intelbras_cloud_bridge(device)
+            return
+
+        try:
+            host = validate_recorder_host(result.host)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Equipamento", str(exc))
+            return
+        authority = self._host_authority(host)
+        web_url = f"http://{authority}" + (f":{result.web_port}" if result.web_port != 80 else "")
+        rtsp_url = f"rtsp://{authority}" + (f":{result.rtsp_port}" if result.rtsp_port != 554 else "")
+        metadata_patch = {
+            "connection_mode": result.connection_mode,
+            "recorder_protocol": result.provider if result.provider in {"intelbras", "hikvision"} else "",
+            "recorder_rtsp_port": int(result.rtsp_port),
+            "channel_scan_limit": int(result.channel_limit),
+            "channel_scan_source": "manual",
+        }
+        if result.provider == "intelbras" and result.sdk_port:
+            metadata_patch["netsdk_port"] = int(result.sdk_port)
+        if result.provider == "hikvision" and result.sdk_port:
+            current_hik = {}
+            if device is not None:
+                try:
+                    raw = json.loads(device["metadata_json"] or "{}").get("hik_sdk", {})
+                    if isinstance(raw, dict):
+                        current_hik = dict(raw)
+                except (TypeError, ValueError):
+                    pass
+            current_hik.setdefault("enabled", False)
+            current_hik.setdefault("live", False)
+            current_hik.setdefault("channels", {})
+            current_hik["port"] = int(result.sdk_port)
+            metadata_patch["hik_sdk"] = current_hik
+
+        if device is None:
+            try:
+                kind = DeviceKind(result.kind)
+            except Exception:
+                kind = DeviceKind.UNKNOWN
+            source = discovered
+            new = Device(
+                site_id=site_id,
+                name=result.name,
+                ip=host,
+                kind=kind,
+                manufacturer=result.manufacturer,
+                model=result.model,
+                provider=result.provider,
+                web_url=web_url,
+                rtsp_url=rtsp_url,
+                mac=str(getattr(source, "mac", "") or ""),
+                serial=str(getattr(source, "serial", "") or ""),
+                uuid=str(getattr(source, "uuid", "") or ""),
+                firmware=str(getattr(source, "firmware", "") or ""),
+                metadata=metadata_patch,
+            )
+            existing = self.db.find_device_by_site_ip(site_id, host)
+            if existing is not None:
+                device_id = int(existing["id"])
+                device = existing
+            else:
+                device_id = int(self.db.upsert_device(new))
+                device = self.db.get_device(device_id)
+            self.db.update_device_identity(
+                device_id, result.name, result.kind, result.manufacturer, result.model
+            )
+        else:
+            device_id = int(device["id"])
+            self.db.update_device_identity(
+                device_id, result.name, result.kind, result.manufacturer, result.model
+            )
+            try:
+                self.db.update_device_connection(
+                    device_id, ip=host, port=device["port"], provider=result.provider,
+                    web_url=web_url, rtsp_url=rtsp_url, metadata_patch=metadata_patch,
+                )
+            except ValueError as exc:
+                QMessageBox.warning(self, "Equipamento", str(exc))
+                return
+
+        # Keep imported/discovered identity in the same physical record.
+        if discovered is not None:
+            try:
+                self._remember_discovered_web_checks(
+                    device_id, discovered,
+                    getattr(self, "discovery_web_results", {}).get(discovered.ip, []),
+                    confirmed_only=True,
+                )
+            except Exception:
+                pass
+
+        self.session_credentials[device_id] = (result.username, result.password)
+        self.credential_save_notice = ""
+        if result.save_password:
+            saved = self.credential_store.set_password(device_id, result.password)
+            self.db.update_device_credential_meta(device_id, result.username, saved.ok)
+            self.credential_save_notice = saved.message
+        else:
+            old = self.db.get_device(device_id)
+            if old and old["credential_saved"]:
+                self.credential_store.delete_password(device_id)
+            self.db.update_device_credential_meta(device_id, result.username, False)
+
+        self.db.merge_device_metadata(device_id, metadata_patch)
+        saved_device = self.db.get_device(device_id)
+        if saved_device and saved_device["archived"]:
+            self.db.archive_device(device_id, False)
+            self.db.set_ignore_discovery(device_id, False)
+        self.refresh_all()
+        self.select_configuration_device(device_id)
+
+        # One action completes the onboarding: save -> connectivity/provider -> channels/stream.
+        saved_device = self.db.get_device(device_id)
+        operational = resolve_operational_identity(saved_device)
+        self._pause_monitor_for_recorder()
+        if operational.kind == "camera":
+            self._start_direct_camera_scan(device_id, saved_device, result.username, result.password)
+        elif operational.kind in {"dvr", "nvr", "xvr"}:
+            self._start_recorder_channel_scan(device_id, saved_device, result.username, result.password)
+        else:
+            self._resume_monitor_after_recorder()
+            QMessageBox.information(
+                self, "Equipamento salvo",
+                "O cadastro foi salvo, mas o tipo ainda está indefinido. Escolha Câmera IP, DVR, NVR ou XVR para validar o acesso."
+            )
+
+    @requires_permission('device_add')
+    def add_device_manual(self):
+        self._open_unified_equipment_editor()
+
+    @requires_permission('device_edit')
+    def edit_selected_device(self):
+        device_id = self.selected_device_id()
+        if not device_id:
+            QMessageBox.information(self, "Equipamento", "Selecione um equipamento.")
+            return
+        device = self.db.get_device(device_id)
+        if is_cloud_device(device):
+            self.configure_intelbras_cloud_bridge(device)
+            return
+        self._open_unified_equipment_editor(device_id=device_id)
+
+    @requires_permission('device_add')
+    def add_discovered_selected(self):
+        if getattr(self, "discovery_web_site_id", self.current_site_id) != self.current_site_id:
+            return
+        row = self.devices_found_table.currentRow()
+        if row < 0 or row >= len(self.discovery_results):
+            return
+        discovered = self.discovery_results[row]
+        known = self.db.find_known_for_discovery(self.current_site_id, discovered)
+        if known and int(known["ignored_discovery"] or 0):
+            QMessageBox.information(
+                self, "Descoberta",
+                "Este equipamento está marcado como ignorado. Remova a marca antes de retomá-lo."
+            )
+            return
+        if known and int(known["archived"] or 0):
+            if not authorize(self, 'device_edit'):
+                return
+            self.db.archive_device(int(known["id"]), False)
+            self.db.set_ignore_discovery(int(known["id"]), False)
+            known = self.db.get_device(int(known["id"]))
+        if known:
+            self.select_configuration_device(int(known["id"]))
+            self._open_unified_equipment_editor(device_id=int(known["id"]), discovered=discovered)
+        else:
+            self._open_unified_equipment_editor(discovered=discovered)
+        self.refresh_discovery_registration()
+
     @requires_permission('admin')
     def change_app_password(self):
         if not password_dialog(self.app_auth, "Alterar senha", "Digite a senha atual:", parent=self):
