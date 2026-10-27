@@ -1,3 +1,13 @@
+# 0.2.94.38 — 27/10/2026
+
+- Equipamentos 2.0: cadastro/manutenção unificados e descoberta em painel flutuante.
+- Marca/tipo determinam automaticamente provider, portas e opções de acesso compatíveis.
+- Salvar equipamento executa validação de acesso e leitura de canais/stream sem trocar de tela.
+- Transferência segura opcional de credenciais via pacote .asx criptografado; JSON tradicional continua sem senhas.
+- Credenciais importadas são restauradas no cofre local e usadas para validação automática.
+- Identidade visual Titânio + Ciano restaurada com ícones vetoriais próprios.
+- Hikvision ISAPI/HCNetSDK e Intelbras NetSDK/Cloud preservados.
+
 # 0.2.94.33 — 26/10/2026
 
 - Configuração → Equipamentos ganha visão Todos os Sites sem alterar o Site ativo do monitoramento.
