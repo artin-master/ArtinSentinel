@@ -52,7 +52,12 @@ jobs:
             tests/test_selective_transfer_029427.py \
             tests/test_transfer_ui_029427.py \
             tests/test_config_portability_0286.py \
-            tests/test_web_service_integration.py
+            tests/test_web_service_integration.py \
+            tests/test_configuration_ux_025.py \
+            tests/test_equipment_tables_qt.py \
+            tests/test_field_reconciliation_0218.py \
+            tests/test_live_view_ux_ptz_0216.py \
+            tests/test_manual_device_validation_qt.py
 
       - name: Hikvision affected regression
         run: |
