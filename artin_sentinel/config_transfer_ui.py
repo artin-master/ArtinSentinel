@@ -174,6 +174,12 @@ def _write_private_bytes(path,raw):
         if os.path.exists(temporary):os.unlink(temporary)
 
 
+def _write_private(path,payload):
+    """Backward-compatible inventory-only writer used by tests and legacy callers."""
+    raw=json.dumps(payload,ensure_ascii=False,indent=2).encode('utf-8')
+    _write_private_bytes(Path(path),raw)
+
+
 def export_devices(owner):
     if not authorize(owner,'admin'):return
     dialog=ExportDevicesDialog(owner)
