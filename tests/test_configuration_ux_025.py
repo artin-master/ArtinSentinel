@@ -3,8 +3,11 @@ from pathlib import Path
 
 def test_configuration_uses_compact_primary_actions():
     text = Path('artin_sentinel/app.py').read_text(encoding='utf-8')
-    for label in ('"Adicionar ▾"', '"Editar"', '"Diagnóstico…"', '"Canais…"', '"Mais ▾"'):
+    for label in ('"Adicionar"', '"Editar"', '"Diagnóstico…"', '"Canais…"', '"Mais ▾"'):
         assert label in text
+    assert 'add.clicked.connect(self.show_discovery_dialog)' in text
+    assert 'self.discovery_dialog.setModal(False)' in text
+    assert 'self.devices_manual_add_btn = QPushButton("Adicionar por endereço")' in text
     assert 'self.dev_table = QTableWidget(0, 9)' in text
     assert '["Nome", "IP", "Tipo", "Fabricante / modelo", "Estado", "Canais", "Áudio", "Confiança", "Credencial"]' in text
 
