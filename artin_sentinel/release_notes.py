@@ -1,13 +1,27 @@
-RELEASE_TITLE = "Importação assistida + Hikvision Playback"
+RELEASE_TITLE = "Equipamentos 2.0 + Titânio/Ciano + Transferência Segura"
 RELEASE_NOTES = [
-    "Equipamentos importados podem ser administrados em uma visão Todos os Sites sem alterar o Site ativo do monitoramento.",
-    "A importação retoma cadastros existentes sem duplicação e inicia configuração assistida quando faltam credencial ou canais validados.",
-    "Após confirmar a credencial, o fluxo normal do provider inicia a leitura/validação dos canais.",
-    "Busca Hikvision ISAPI recebe hardening de XML, ResponseStatus, track e playbackURI; HCNetSDK opcional da 0.2.94.32 é preservado.",
-    "Intelbras/NetSDK, Cloud, Live View, reprodução e exportação existentes permanecem na base 0.2.94.32.",
-    "Candidata requer validação física dos DVRs importados e da gravação Hikvision antes de publicação estável.",
+    "Tela de Equipamentos ganha fluxo único para localizar, adicionar e editar, com a descoberta aberta em painel flutuante.",
+    "Cadastro e manutenção usam a mesma janela: marca/tipo selecionam o provider adequado e ocultam/bloqueiam acessos incompatíveis.",
+    "Salvar um equipamento local já valida a credencial e inicia automaticamente a leitura de canais/stream.",
+    "Importação pode transportar credenciais em pacote .asx criptografado com AES-256-GCM + scrypt; senhas são regravadas no cofre local.",
+    "Credenciais restauradas são usadas automaticamente para validar acesso/canais, sem pedir novamente a senha de cada DVR.",
+    "Identidade visual Titânio + Ciano volta a ser aplicada com escudo e ícones vetoriais próprios em Ao Vivo, Reprodução e Equipamentos.",
+    "Hikvision ISAPI/HCNetSDK e Intelbras NetSDK/Cloud da base anterior são preservados; validação física continua obrigatória.",
 ]
-CHANGELOG_TEXT = """Artin Sentinel 0.2.94.33 — Importação Assistida + Hikvision Playback
+CHANGELOG_TEXT = """Artin Sentinel 0.2.94.38 — Equipamentos 2.0 + Titânio/Ciano
+
+• Dispositivos localizados saem da tela fixa e passam para um painel flutuante.
+• Adicionar / localizar centraliza descoberta, inclusão manual e Intelbras Cloud.
+• Adicionar, Editar e equipamento descoberto convergem para o mesmo cadastro de acesso.
+• A marca/tipo controla quais tecnologias aparecem: Hikvision HCNetSDK/ISAPI/RTSP; Intelbras/Dahua NetSDK/HTTP/RTSP; genérico ONVIF/RTSP.
+• Salvar e validar acesso grava o mesmo cadastro, testa credencial e inicia leitura de canais/stream automaticamente.
+• Atualizar canais permanece como manutenção manual.
+• Exportação pode levar credenciais num .asx criptografado; JSON sem credenciais continua disponível.
+• Importação segura restaura credenciais no keyring e reutiliza o cadastro existente sem duplicação.
+• Visual Titânio + Ciano restaurado em ícones, marca e estados dos controles.
+• Intelbras e Hikvision continuam isolados por provider; motores proprietários não foram substituídos.
+
+Artin Sentinel 0.2.94.33 — Importação Assistida + Hikvision Playback
 
 • Configuração → Equipamentos oferece visão Todos os Sites sem misturar o Site operacional.
 • Importações novas ou já existentes são retomadas pelo cadastro original, sem duplicação.
